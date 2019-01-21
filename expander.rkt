@@ -70,14 +70,14 @@
              #:with default
              (if (attribute default-value)
                  (datum->syntax this-syntax (format " = ~a" (syntax-e #'default-value)))
-                    (datum->syntax this-syntax ""))
+                 (datum->syntax this-syntax ""))
              #:with size
              (if (and (attribute x) (attribute y))
                  (datum->syntax this-syntax
                                 (format "[~a:~a] "
                                         (syntax-e (attribute x))
                                         (syntax-e (attribute y))))
-                    (datum->syntax this-syntax "")))))
+                 (datum->syntax this-syntax "")))))
 (define tabs 0)
 (define (inc-tab) (set! tabs (+ tabs 1)))
 (define (dec-tab) (set! tabs (- tabs 1)))
@@ -93,7 +93,6 @@
 
 
 (define-syntax-parser ~expression
-
   #:datum-literals (~eq? set ~delay ~+ ~-)
   [(_ x:integer)
    #'x]
@@ -151,8 +150,19 @@
          (printf "; \n")
          (dec-tab)
          (prt "end\n")) ...                
-         )]
- )
+         )])
+
+(define-syntax-parser ~if
+  [(_ test-expr true-expr false-expr)
+   #'(~cond
+      [test-expr true-expr]
+      [else false-expr])])
+
+(define-syntax-parser ~when
+  [(_ test-expr true-expr)
+   #'(~cond
+      [test-expr true-expr])])
+
 
 (define-syntax-parser ~begin-line
   #:datum-literals (~cond ~locals ~expression)
@@ -160,9 +170,11 @@
    #'(~cond expr ...)]
   [(_ (~locals params ...))
    #'(~locals params ...)]
-    [(_ (~expression expr ...))
+  [(_ (~expression expr ...))
      #'(begin
-         (prt "~a;\n" (~expression expr ...)))])
+         (prt "~a;\n" (~expression expr ...)))]
+  [(_ expr ...)
+     #'(~begin-line (~expression expr ...))])
 
 
 (define-syntax-parser ~begin
@@ -185,9 +197,10 @@
        )])
 
 (define-syntax-parser ~always-line
-  #:datum-literals (~begin)
-  [(_ (~begin name expr ...))
-   #'(~begin name expr ...)])
+  [(_ expr) #'expr])
+  ;; #:datum-literals (~begin)
+  ;; [(_ (~begin name expr ...))
+  ;;  #'(~begin name expr ...)])
 
 (define-syntax-parser ~sync
   [(_ target rx clk)
@@ -246,15 +259,16 @@
        )])
     
 (define-syntax-parser ~module-line
-  #:datum-literals (~begin ~always ~sync)
-  [(_ (~begin name expr ...))
-   #'()]
-  [(_ (~always sens-list expr ...))
-   #'(~always sens-list expr ...)]
-  [(_ (~sync stuff ...))
-      #'(~sync stuff ...)]                       
+  [( _ x) #'x])
+  ;; #:datum-literals (~begin ~always ~locals)
+  ;; [(_ (~begin name expr ...))
+  ;;  #'()]
+  ;; [(_ (~always sens-list expr ...))
+  ;;  #'(~always sens-list expr ...)]
+  ;; [(_ (~syn stuff ...))
+  ;;     #'(~sync stuff ...)]                       
 
-  )
+  ;; )
 
 (define-syntax-parser ~module
   [(_ name-sym:id
