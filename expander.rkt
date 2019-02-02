@@ -6,8 +6,10 @@
 (require (for-syntax syntax/parse
                      racket/string
                      racket/base
+                     racket/set
                      racket/match
                      racket/syntax
+                     syntax/srcloc
                      racket/list))
 
 
@@ -25,8 +27,69 @@
    #'(when is-debug
        (writeln (format text args ...)))]))
 
+
+
 (begin-for-syntax
-         
+  (define scoped-bindings-stack (box (list (mutable-set))))
+  (define (push-scoped-stack)
+ ;
+   (printf "push\n")
+    (let* ([lst (unbox scoped-bindings-stack)]
+           [new-lst (cons (mutable-set) lst)])
+      (set-box! scoped-bindings-stack new-lst)))
+    
+  (define (pop-scoped-stack)
+;    (printf "pop\n")
+    (let* ([lst (unbox scoped-bindings-stack)]
+           [new-lst (cdr lst)])
+      (set-box! scoped-bindings-stack new-lst)))
+
+  (define (peek-scoped-stack)
+    (let ([lst (unbox scoped-bindings-stack)])
+      (car lst)))
+
+  (define (add-scoped-binding stx-name stx)
+    (let ([name (syntax-e stx-name)]
+          [scoped (peek-scoped-stack)])
+ ;     (printf "got ~a\n" name)
+      (when (and (in-scope? name) (not (equal? name "global")))
+        (writeln
+         (format "warning: ~a is already in scope at ~a"
+                 name (source-location->string stx))))
+      (set-add! scoped name)))
+
+  (define (remove-scoped-binding stx-name)
+    (let ([name (syntax-e stx-name)]
+          [scoped (peek-scoped-stack)])
+      (set-remove! scoped name)))
+
+  (define (in-scope? name)
+;    (printf "in-scope? ~a \n" name)
+    (define (aux lst)
+      (cond
+        [(equal? name "global") #t]
+        [(empty? lst) #f]
+        [(set-member? (car lst) name) #t]
+        [else (aux (cdr lst))]))
+    (aux (unbox scoped-bindings-stack))))
+    
+
+(begin-for-syntax
+  (define-syntax-class scoped-binding
+    #:description "identifier in scope"
+    #:opaque
+    (pattern x:id
+             #:with name  (symbol->string (syntax-e #'x))
+             #:when (in-scope? (symbol->string (syntax-e #'x)))
+             ))
+
+  (define-syntax-class binding
+    #:description "identifier name"
+    #:opaque
+    (pattern x:id
+             #:with name (symbol->string (syntax-e #'x))
+             ))
+
   (define-syntax-class edge-type
     (pattern #:posedge)
     (pattern #:negedge))
@@ -78,19 +141,6 @@
                                         (syntax-e (attribute x))
                                         (syntax-e (attribute y))))
                  (datum->syntax this-syntax "")))))
-(define tabs 0)
-(define (inc-tab) (set! tabs (+ tabs 1)))
-(define (dec-tab) (set! tabs (- tabs 1)))
-
-(define-syntax-parser prt
-  [(_ str args ...)
-   #'(printf (string-append (make-string tabs (integer->char 9)) str) args ...)])
-(define-syntax-parser pr
-  [(_ str args ...)
-   #'(printf str args ...)])
-
-(define (print-pad) (printf  (make-string tabs (integer->char 9))))
-
 
 (define-syntax-parser ~expression
   #:datum-literals (~eq? set ~delay ~+ ~-)
@@ -101,55 +151,68 @@
   [(_ (~+ x y z ...+))
    #'(format "(~a + ~a)" (~expression x) (~expression (~+ y z ...)))]
   [(_ (~+ x y))
-      #'(format "~a + ~a" (~expression x) (~expression y))]
+   #'(format "~a + ~a" (~expression x) (~expression y))]
   [(_ (~- x y z ...+))
    #'(format "(~a - ~a)" (~expression x) (~expression (~- y z ...)))]
   [(_ (~- x y))
-      #'(format "~a - ~a" (~expression x) (~expression y))]
+   #'(format "~a - ~a" (~expression x) (~expression y))]
   [(_ (~eq? x y))
-      #'(format "~a == ~a" (~expression x) (~expression y))]
+   #'(format "~a == ~a" (~expression x)(~expression y))]
   [(_ (set x y))
-      #'(format "~a <= ~a" (~expression x) (~expression y))]
-  [(_ x:id)
+   #'(format "~a <= ~a" (~expression x) (~expression y))]
+  [(_ x:scoped-binding)
+   #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'x))) 
+   #'name]
+  [(_ x:binding)
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
-      #'name]
-  [(_ expr )
-   #'"expr..."])
+   #'(error x name "is not in scope")]
+  
+)
 
 (define-syntax-parser ~cond
   #:datum-literals (else)
   [(_  [first-test first-outcome]  [expr-test expr-outcome] ...
        [else else-outcome])
-   #`(begin
-       (~cond
+   (printf "cond\n")
+   #'`(
+       ,(~cond
          [first-test first-outcome]
          [expr-test expr-outcome] ...)
-       (prt "else begin\n") 
-       (inc-tab)
-       (prt "~a" (~expression else-outcome))
-       (printf "; \n")
-       (dec-tab)
-       (prt "end\n")       
+       tab
+       "else begin\n"
+       inc-tab
+       tab
+       ,(format "~a" (~expression else-outcome))
+       "; \n"
+       dec-tab
+       tab
+       "end\n"
        )]
   [(_  [first-test first-outcome]  [expr-test expr-outcome] ...)
-   #'(begin
-       (prt "if(")
-       (printf "~a" (~expression first-test))
-       (printf ") begin\n")
-       (inc-tab)
-       (prt "~a" (~expression first-outcome))
-       (printf "; \n")
-       (dec-tab)
-       (prt "end\n")
-       (begin
-         (prt "else if(")
-         (printf "~a" (~expression expr-test))
-         (printf ") begin\n")
-         (inc-tab)
-         (prt "~a" (~expression expr-outcome))
-         (printf "; \n")
-         (dec-tab)
-         (prt "end\n")) ...                
+   (printf "cond 2\n")
+   #'`(
+       tab
+       "if("
+       ,(~expression first-test)       
+       ") begin\n"
+       inc-tab
+       tab
+       ,(~expression first-outcome)
+       "; \n"
+       dec-tab
+       tab
+       "end\n"
+       (tab
+        "else if("
+        ,(~expression expr-test)
+        ") begin\n"
+        inc-tab
+        tab
+        ,(~expression expr-outcome)
+        "; \n"
+        dec-tab
+        tab
+        "end\n") ...                
          )])
 
 (define-syntax-parser ~if
@@ -163,41 +226,58 @@
    #'(~cond
       [test-expr true-expr])])
 
-
 (define-syntax-parser ~begin-line
-  #:datum-literals (~cond ~locals ~expression)
+  #:datum-literals (~cond ~locals ~expression ~when ~if)  
   [(_ (~cond expr  ...))
+     (printf "begin line 1\n")
    #'(~cond expr ...)]
+  [(_ (~when expr  ...))
+   #'(~when expr ...)]
+  [(_ (~if expr  ...))
+   #'(~if expr ...)]
+  
   [(_ (~locals params ...))
+     (printf "begin line 2\n")
    #'(~locals params ...)]
   [(_ (~expression expr ...))
-     #'(begin
-         (prt "~a;\n" (~expression expr ...)))]
+     (printf "begin line 3\n")
+     #'`(tab
+         ,(format "~a;\n" (~expression expr ...)))]
   [(_ expr ...)
+     (printf "begin line\n")
      #'(~begin-line (~expression expr ...))])
 
 
 (define-syntax-parser ~begin
   [(_ block-name:id expr ...+)
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'block-name)))
-   #'(begin
-       (prt "begin : ~a\n" name)
-       (inc-tab)
-       (~begin-line expr) ...
-       (dec-tab)
-       (prt "end //end of block ~a\n" name)
+   (printf "begin\n")
+   #'`(
+       tab
+       ,(format "begin : ~a\n" name)
+       inc-tab
+       ,(~begin-line expr) ...
+       dec-tab
+       tab
+       ,(format "end //end of block ~a\n" name)
        )]
   [(_  expr ...+)
-   #'(begin
-       (prt "begin\n")
-       (inc-tab)
-       (~begin-line expr) ...
-       (dec-tab)
-       (prt "end //end of block\n")
+       (printf "begin\n")
+   #'`(
+       tab
+       "begin\n"
+       inc-tab
+       ,(~begin-line expr) ...
+       dec-tab
+       tab
+       "end //end of block\n"
        )])
 
 (define-syntax-parser ~always-line
-  [(_ expr) #'expr])
+
+  [(_ expr)
+   (printf "always-line\n")
+   #'expr])
   ;; #:datum-literals (~begin)
   ;; [(_ (~begin name expr ...))
   ;;  #'(~begin name expr ...)])
@@ -207,59 +287,80 @@
    (with-syntax
      ([q_rx (string->symbol "q_rx")]   ;todo; gen symbol names
       [qq_rx (string->symbol "qq_rx")])
-   #'(begin
-       (~locals
+     (printf "sync\n")
+   #'`(
+       ,(~locals
         ([q_rx   #:reg] 
          [qq_rx  #:reg] 
          [target #:reg])) 
-       (~always ([#:posedge clk])
+       ,(~always ([#:posedge clk])
          (~begin 
           (set q_rx rx)
           (set qq_rx q_rx)
           (set target qq_rx)))))])
                 
-              
+(define-syntax (push-binding stx)
+  (syntax-parse stx
+    [(_ id)
+     (add-scoped-binding #'id stx)
+  #'`(())]))
+
+(define-syntax (pop-scoped-stack stx)
+  (syntax-parse stx
+    [(_)
+     (printf "! ~a\n" stx)
+     (pop-scoped-stack)
+  #''()]))
+
 (define-syntax-parser ~locals
+;  (printf "locals\n")
   [(_ (params:local-param ...))
-   #'(begin
-       (prt "~a ~a ~a ~a;\n" params.type params.size params.name params.default) ...       
+   #'`(
+       (
+       tab
+       ,(format "~a ~a ~a ~a;\n" params.type params.size params.name params.default)) ...
+       ,(push-binding params.name) ...
        )])
   
 (define-syntax-parser ~always
   #:datum-literals (* or)
   [(_ (or sens:sensitivity rest:sensitivity ...) expr ...)
-   #'(begin
-       (prt "always @(")
-       (begin
-         (pr "~a" sens.edge-type)
-         (pr " ~a" sens.name)) 
-       (Begin
-         (pr " or ")
-         (pr "~a" rest.edge-type)
-         (pr " ~a"rest.name)) ...
-         (pr ")\n")
-       (inc-tab)
-       (~always-line expr ...)
-       (dec-tab)
-       )]
+   (printf "always\n")
+   #'`(
+       "always @("
+       
+       ,(format "~a" sens.edge-type)
+       ,(format " ~a" sens.name)
+       (
+         " or "
+         ,(format "~a" rest.edge-type)
+         ,(format " ~a" rest.name)
+       ) ...
+       ")\n"
+       inc-tab
+      ,(~always-line expr ...)
+       dec-tab)]
   [(_ (sens:sensitivity rest:sensitivity ...) expr ...)
-   #'(begin
-       (prt "always @(")
-       (begin
-         (pr "~a" sens.edge-type)
-         (pr " ~a" sens.name)) 
-       (begin
-         (pr " , ")
-         (pr "~a" rest.edge-type)
-         (pr " ~a"rest.name)) ...
-       (pr ")\n")
-       (inc-tab)
-       (~always-line expr ...)
-       (dec-tab)
+   (printf "always\n")
+   #'`(
+       "always @("
+       ,(format "~a" sens.edge-type)
+       ,(format " ~a" sens.name)
+       (
+         " , "
+         ,(format "~a" rest.edge-type)
+         ,(format " ~a"rest.name)) ...
+       ")\n"
+       inc-tab
+       ,(~always-line expr ...)
+       dec-tab
        )])
     
 (define-syntax-parser ~module-line
-  [( _ x) #'x])
+
+  [( _ x)
+   (printf "moduel line\n")
+   #'x])
   ;; #:datum-literals (~begin ~always ~locals)
   ;; [(_ (~begin name expr ...))
   ;;  #'()]
@@ -268,24 +369,74 @@
   ;; [(_ (~syn stuff ...))
   ;;     #'(~sync stuff ...)]                       
 
-  ;; )
+;; )
+
+(define (code-gen input filename)
+  (define tab 0)
+  (define out (open-output-file #:mode 'binary #:exists 'replace filename))
+  (define (aux in)
+    (for ([sym in])
+      (cond
+        [(string? sym) (display sym out)]
+        [(eq? 'inc-tab sym) (set! tab (+ 1 tab))]
+        [(eq? 'tab sym)     (display (make-string tab (integer->char 9)) out)]
+        [(eq? 'dec-tab sym) (set! tab (- tab 1))]
+        [(eq? '() sym) '()]
+        [(list? sym) (aux sym)]
+        [else (printf "unknonw ~a\n" sym)
+              ])))
+  (aux input)
+  (close-output-port out))
+
+(define-syntax-parser ~test1
+  [(_ somethings ...)
+   (printf "test1\n")
+   (push-scoped-stack)
+   #'`("first\n"
+       inc-tab
+       tab
+       "second"
+       ,somethings ...
+       ,(pop-scoped-stack))])
+
+(define-syntax-parser ~test2
+  [(_ somethings ...)
+   (printf "test2\n")
+   #'`("third"
+       ,somethings ...)])
+(define-syntax-parser ~test3
+  [(_ somethings ...)
+   (printf "test3\n")
+   #'`(
+       "fourth"
+       ,(format "~a" somethings) ...
+       ;,somethings ...
+       )])
 
 (define-syntax-parser ~module
+
   [(_ name-sym:id
       (p:param ... last:param)
       expression ... )
 
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
-  #'(begin
-      (prt "module ~a (\n" name)
-      (inc-tab)
+;     (printf "moduel\n")
+    (push-scoped-stack)
+  #'`(
+      ,(format "module ~a (\n" name)      
+      inc-tab
       ;port declarations
-      (prt "~a ~a ~a ~a,\n" p.direction p.type p.size p.name) ...
-      (prt "~a ~a ~a ~a);\n" last.direction last.type last.size last.name)
-      
-      (~module-line expression) ...
-      (dec-tab)
-      (prt "endmodule\n"))])
+      (tab
+       ,(format "~a ~a ~a ~a,\n" p.direction p.type p.size p.name))...
+      tab
+      ,(format "~a ~a ~a ~a);\n" last.direction last.type last.size last.name)
+      ,(push-binding p.name) ...
+      ,(push-binding last.name)
+      ,(~module-line expression) ...
+      dec-tab
+      "endmodule\n"
+      ,(pop-scoped-stack)
+      )])
   
   
 (provide (all-defined-out))
