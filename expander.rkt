@@ -43,12 +43,9 @@
   (define (get-enum-keys enum-name)
     (map car (hash-ref declared-enums (symbol->string enum-name))))
   (define (get-enum-value enum-name key)
-    (printf "eg ~a ~a\n" enum-name key)
     (let* ([pairs (hash-ref declared-enums (symbol->string enum-name))]
            [pair (memf (λ (p)
-                         (printf "~a = ~a\n" (car p) (symbol->string key))
                          (equal? (car p) (symbol->string key))) pairs)])
-      (printf "ret ~a \n" (cdr (car pair)))
       (cdr (car pair))))
   (define (add-enum enum-name vals)
     (hash-set! declared-enums (symbol->string enum-name) vals))
@@ -131,20 +128,16 @@
              #:with name #'s.name
              #:with size (datum->syntax this-syntax "")
              #:with compiled (datum->syntax this-syntax (symbol->string (syntax-e (attribute s)))))
-    
+     (pattern [s:scoped-binding x:expr]
+             #:with name #'s.name
+             #:with compiled
+             #'`(name "[" ,x "]")
+)   
     (pattern [s:scoped-binding x:expr y:expr]
              #:with name #'s.name
-             #:with size
-             (datum->syntax this-syntax
-                            (format "[~a:~a]"
-                                    (eval (syntax-e (attribute x)))
-                                    (eval (syntax-e (attribute y)))))
              #:with compiled
-             (datum->syntax this-syntax
-                            (format "~a[~a:~a]"
-                                    (syntax-e (attribute name))
-                                    (eval (syntax-e (attribute x)))
-                                    (eval (syntax-e (attribute y)))))))
+             #'`(name "[" ,x ":" ,y "]")
+))
 
 
   
@@ -154,20 +147,20 @@
   (syntax-parse stx
     [(_ id)
      (add-scoped-binding #'id stx)
-  #'`(())]))
+  #'(void)]))
 
 (define-syntax (pop-scoped-stack stx)
   (syntax-parse stx
     [(_)
-     (printf "! ~a\n" stx)
+;     (printf "! ~a\n" stx)
      (pop-scoped-stack)
-  #''()]))
+  #'(void)]))
 
 (define-syntax (toggle-always-sens stx)
   (syntax-parse stx
     [(_)
      (toggle-always-sens)
-  #''()]))
+  #'(void)]))
   
 (begin-for-syntax
   (define (is-hex-literal? str)
@@ -191,8 +184,6 @@
       (if (eq? parsed #f)
           #f
           (cdr parsed)))) ; outputs size base negative? value
-
-
 
   (define-syntax-class number-literal
     #:datum-literals (_)
@@ -222,7 +213,7 @@
              #:do [(define cleaned (string-replace
                                     (string-replace str "_" "") "%" ""))]
              #:with base 2
-             #:with bits (- (string-length str) 1)
+             #:with bits (string-length cleaned)
              #:with compiled
              (datum->syntax this-syntax
                             (format "~a'b~a"
@@ -250,11 +241,7 @@
                                     (syntax-e (attribute bits))
                                     (syntax-e (attribute base))
                                     (list-ref str 3)
-                                              )))
-             )
-
-
-
+                                              ))))
   
       
   (define-syntax-class edge-type
@@ -283,25 +270,25 @@
     (pattern [name-sym:id
               direction-option
               type-option
-              (~optional [x (~optional y)])]
+              (~optional [x (~optional y)])
+              (~optional default-value)]
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
              #:with direction (datum->syntax this-syntax (keyword->string (syntax-e #'direction-option)))
              #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
+             #:with default
+             (if (attribute default-value)
+                 #'`(" = " ,(~expression default-value))
+                 #'"")
+
              #:with size
              (cond
                [(and (attribute x) (attribute y))
-                 (datum->syntax this-syntax
-                                (format "[~a:~a] "
-                                        (syntax-e (attribute x))
-                                        (syntax-e (attribute y))))]
+                #'`("[" ,x ":" ,y "]")]
                [(attribute x)
-                (datum->syntax this-syntax
-                                (format "[~a:~a] "
-                                        (- (eval (syntax-e (attribute x))) 1)
-                                        0))]
-               [else
-                 (datum->syntax this-syntax "")])))
-    (define-syntax-class local-param
+                #'`("[" ,(- x 1) ":0"  "]")]
+               [else #'""])))
+
+  (define-syntax-class local-param
     #:datum-literals (:)
     (pattern [name-sym:id
               type-option
@@ -311,87 +298,139 @@
              #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
              #:with default
              (if (attribute default-value)
-                 (datum->syntax this-syntax (format " = ~a" (eval (syntax-e #'default-value))))
-                 (datum->syntax this-syntax ""))
+                 #'`(" = " ,(~expression default-value))
+                 #'"")
              #:with size
              (cond
                [(and (attribute x) (attribute y))
-                 (datum->syntax this-syntax
-                                (format "[~a:~a] "
-                                        (syntax-e (attribute x))
-                                        (syntax-e (attribute y))))]
+                #'`("[" ,x ":" ,y "]")]
                [(attribute x)
-                (datum->syntax this-syntax
-                                (format "[~a:~a] "
-                                        (+ 1 (eval (syntax-e (attribute x))))
-                                        0))]
-               [else
-                 (datum->syntax this-syntax "")]))))
+                #'`("[" ,(- x 1) ": 0" "]")]
+               [else #'""]))))
+         
 
 (define-syntax-parser ~expression
-  #:datum-literals (~eq? ~set ~delay ~+ ~- ~if ~case else )
+  #:datum-literals
+  (~eq? ~set ~delay ~if ~case else ~when ~concat
+   ~+ ~-  ~<< ~>>)
   [(_ x:integer)
    #'x]
   [(_ x:number-literal)
    #'x.compiled]
-
   [(_ (~delay x y))
-   #'(format "#~a ~a" (~expression x)(~expression y))]
+   #'`("#" ,(~expression x) " " ,(~expression y))]
+  [(_ (~when test true-expr))
+   ;special case one-line when in RHS of expression - ternary
+   #'(~begin (~when test true-expr))]
+  [(_ (~concat x y ...+))
+   #'`("{" ,(~expression x)  ( ", ",(~expression y)) ... "}" )]
   [(_ (~if test true-expr false-expr))
-   #'(format "~a ? ~a : ~a" (~expression test)(~expression true-expr)(~expression false-expr))]
-  ;todo: error handling case when default is not supplied
+   #'`(
+       ,(~expression test)
+       " ? "
+       ,(~expression true-expr)
+       " : "
+       ,(~expression false-expr))]
 
   [(_ (~case val
              [test true-expr]
              [test2 expr2] ...+
              [else def-expr]))
-   #'(format "~a ? ~a : ~a"
-             (~expression (~eq? val test))
-             (~expression true-expr)
-             (~expression (~case val [test2 expr2] ... [else def-expr])))
-   ]
+   #'`("~a ? ~a : ~a"              
+       ,(~expression (~eq? val test))
+       " ? "
+       ,(~expression true-expr)
+       " : "
+       ,(~expression (~case val [test2 expr2] ... [else def-expr])))]
   [(_ (~case val [test true-expr]
                  [else def-expr]))
-   #'(format "~a ? ~a : ~a"
-             (~expression (~eq? val test))
-             (~expression true-expr)
-             (~expression def-expr))]
+   #'`(
+       ,(~expression (~eq? val test))
+       " ? "
+       ,(~expression true-expr)
+       " : "
+       ,(~expression def-expr))]
   [(_ (~case val [test true-expr] ...+))
+   ;todo: error handling case when default is not supplied
+   ;this case will not work when the last case (any expression) is enbaled.
    #:fail-when #t "you must supply an else branch of a case when used as an epxression"
    #'(void)]
-
+  [(_ (~<< x y))
+   #'`(
+       ,(~expression x)
+       " << "
+       ,(~expression y))]
+  [(_ (~>> x y))
+   #'`(
+       ,(~expression x)
+       " >> "
+       ,(~expression y))]
   [(_ (~+ x y z ...+))
-   #'(format "(~a + ~a)" (~expression x) (~expression (~+ y z ...)))]
+   #'`(
+       "("
+       ,(~expression x)
+       " + "
+       ,(~expression (~+ y z ...))
+       ")")]
   [(_ (~+ x y))
-   #'(format "~a + ~a" (~expression x) (~expression y))]
+      #'`(,(~expression x)
+       " + "
+       ,(~expression y))]
   [(_ (~- x y z ...+))
-   #'(format "(~a - ~a)" (~expression x) (~expression (~- y z ...)))]
+   #'`(
+       "("
+       ,(~expression x)
+       " - "
+       ,(~expression (~- y z ...))
+       ")")]
   [(_ (~- x y))
-   #'(format "~a - ~a" (~expression x) (~expression y))]
+   #'`(,(~expression x)
+       " - "
+       ,(~expression y))] 
   [(_ (~eq? x y))
-   #'(format "~a == ~a" (~expression x)(~expression y))]
+   #'`(,(~expression x)
+       " == "
+       ,(~expression y))]
   [(_ (~set x y))
    #:when is-always-sens
-   #'(format "~a <= ~a" (~expression x) (~expression y))]
+   #'`(,(~expression x)
+       " <= "
+       ,(~expression y))]
   [(_ (~set x y))
-   #'(format "~a = ~a" (~expression x) (~expression y))]
+   #'`(,(~expression x)
+       " = "
+       ,(~expression y))]
   [(_ x:bound-usage)
    #'x.compiled]
-  [(_ x:binding)
-   #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
-   #'(error x name "is not in scope")]
+  ;; [(_ x:binding)
+  ;;  #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
+  ;;  #'(error x name "is not in scope")]
 
-  ;; [(_ x:expr)
-  ;;  #'x]
+  [(_ x:expr)
+   #'x]
   
 )
 
 (define-syntax-parser ~begin-or-wrap-expression
-  #:datum-literals (~begin)
+  #:datum-literals (~begin ~set ~when ~cond)
+  [(_ (~begin exprs ...))
+   #'(~begin exprs ...)]
   [(_ ~begin exprs ...)
    #'(~begin exprs ...)]
+  [(_ (~when exprs ...))
+   #'(~begin (~when exprs ...))]
+  [(_ (~cond exprs ...))
+   #'(~cond exprs ...)]
+  [(_ ~when exprs ...)
+   #'(~when exprs ...)]    
+  [(_ (~set [x y] ...))
+   #'(~begin (~set x y) ...)]
+
   [(_ x:expr)
-   #'(~expression x)])
+;   (printf "!! ~a\n" #'x)
+   #'`(tab
+       ,(~expression x)
+       ";")])
 
    
 (define-syntax-parser ~case
@@ -406,9 +445,9 @@
        (
         tab
         ,lhs.compiled
-        " : "
+        " : \n"
         ,(~begin-or-wrap-expression rhs)
-        ";\n"
+        "\n"
         ) ...
        dec-tab
        tab
@@ -416,50 +455,48 @@
 
 (define-syntax-parser ~cond
   #:datum-literals (else)
-  [(_  [first-test first-outcome]  [expr-test expr-outcome] ...
+  [(_  [first-test first-outcome] [expr-test expr-outcome] ...
        [else else-outcome])
-   (printf "cond\n")
-        (printf "COND ORIGIN ~a\n" (syntax-property this-syntax 'origin ))
    #'`(
        ,(~cond
          [first-test first-outcome]
          [expr-test expr-outcome] ...)
        tab
-       "else begin\n"
+       "else\n"
        inc-tab
-       tab
-       ,(format "~a" (~expression else-outcome))
-       "; \n"
+       ,(~begin-or-wrap-expression else-outcome)
+       "\n"
        dec-tab
-       tab
-       "end\n"
        )]
-  [(_  [first-test first-outcome]  [expr-test expr-outcome] ...)
-     (printf "COND ORIGIN ~a\n" (syntax-property this-syntax 'origin ))
-   (printf "cond 2\n")
+  [(_  [first-test first-outcome])
    #'`(
        tab
        "if("
        ,(~expression first-test)       
-       ") begin\n"
-       inc-tab
+       ")\n"
+       inc-tab       
+       ,(~begin-or-wrap-expression first-outcome)
+       "\n"
+        )]
+  [(_  [first-test first-outcome] [expr-test expr-outcome] ...)
+   #'`(
        tab
-       ,(~expression first-outcome)
-       "; \n"
+       "if("
+       ,(~expression first-test)       
+       ")\n"
+       inc-tab       
+       ,(~begin-or-wrap-expression first-outcome)
+       "\n"
        dec-tab
-       tab
-       "end\n"
        (tab
         "else if("
         ,(~expression expr-test)
-        ") begin\n"
+        ")\n"
         inc-tab
-        tab
-        ,(~expression expr-outcome)
-        "; \n"
+        ,(~begin-or-wrap-expression expr-outcome)
+        "\n"
         dec-tab
-        tab
-        "end\n") ...                
+        "\n") ...                
          )])
 
 (define-syntax-parser ~if
@@ -512,15 +549,44 @@
    (with-syntax([(enum-vals ...) (map (λ (v) (get-enum-value (syntax-e #'enum-name) v))
                                       (syntax->datum #'(key ...)))])
      #'(~case test [enum-vals (~set target value)] ...))]
+  )
+
+(define-syntax-parser ~match
+  [(_ test:expr enum-name:enum
+      [key expr] ...)
+   #:fail-when (check-duplicate-identifier (syntax->list #'(key ...)))
+    "duplicate enum value"
+
+   #:fail-when
+   (let ([results (filter (λ (v) (not (enum-key-exists? (syntax-e #'enum-name) v)))
+                          (syntax->datum #'(key ...)))])
+     (if (not (eq? results '()))
+         (with-syntax ([res results])  #'res)
+       #f))
+   "some identifiers do not exist in enum"
+
+   #:fail-when
+   (let*
+       ([keys (map (λ (v) (format "~a" v)) (syntax->datum #'(key ...)))]
+        [results (filter (λ (v) (not (member v keys)))
+                         (get-enum-keys (syntax-e #'enum-name)))])
+     (if (not (eq? results '()))
+         (with-syntax ([res results]) #'res)
+         #f))
+   "missing cases in the enum"
+     
+   (with-syntax([(enum-vals ...) (map (λ (v) (get-enum-value (syntax-e #'enum-name) v))
+                                      (syntax->datum #'(key ...)))])
+     #'(~case test [enum-vals expr] ...))]
 )
 
-(define-syntax-parser case-set
+(define-syntax-parser ~case-set
   [(_ target:bound-usage test:expr
       [key:number-literal value] ...)     
      #'(~case test [key (~set target value)] ...)])
 
 (define-syntax-parser ~begin-line
-  #:datum-literals (~cond ~locals ~expression ~when ~if ~set ~match-set)  
+  #:datum-literals (~cond ~locals ~expression ~when ~if ~set ~match-set ~match ~case-set)  
   [(_ (~cond expr  ...))
    #'(~cond expr ...)]
   [(_ (~when expr  ...))
@@ -530,17 +596,24 @@
   [(_ (~locals params ...))
    #'(~locals params ...)]
   [(_ (~match-set expr ...))
-      #'(~match-set expr ...)]
+   #'(~match-set expr ...)]
+  [(_ (~match expr ...))
+   #'(~match expr ...)]
+  [(_ (~case-set expr ...))
+      #'(~case-set expr ...)]
   [(_ (~expression expr ...))
-     #'`(tab
-         ,(format "~a;\n" (~expression expr ...)))]  
+   #'`(tab
+       ,(~expression expr ...)
+       ";\n")]  
   [(_ (~set [x y] ...))
    #'`(
        (tab
-            ,(format "~a;\n" (~expression (~set x y))))...)]
+        ,(~expression (~set x y))
+        ";\n")...)]
   [(_ expr ...)
-        #'`(tab
-         ,(format "~a;\n" (~expression expr ...)))
+   #'`(tab
+       ,(~expression expr ...)
+       ";\n")
    ;#'(~begin-line (~expression expr ...))
    ])
 
@@ -550,12 +623,14 @@
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'block-name)))
    #'`(
        tab
-       ,(format "begin : ~a\n" name)
+       "beign "
+       ,name
+       "\n"
        inc-tab
        ,(~begin-line expr) ...
        dec-tab
        tab
-       ,(format "end //end of block ~a\n" name)
+       "end \n"
        )]
   [(_  expr ...+)
    #'`(
@@ -565,41 +640,36 @@
        ,(~begin-line expr) ...
        dec-tab
        tab
-       "end //end of block\n"
+       "end \n"
        )])
 
 
-(define-syntax-parser ~sync
-  [(_ target rx clk)
-   (with-syntax
-     ([q_rx (string->symbol "q_rx")]   ;todo; gen symbol names
-      [qq_rx (string->symbol "qq_rx")])
-     (printf "sync\n")
-   #'`(
-       ,(~locals
-        [q_rx   #:reg] 
-         [qq_rx  #:reg] 
-         [target #:reg]) 
-       ,(~always ([#:posedge clk])
-         (~begin 
-          (~set q_rx rx)
-          (~set qq_rx q_rx)
-          (~set target qq_rx)))))])
+
                 
 
 (define-syntax-parser ~locals
   [(_ params:local-param ...)
    #'`(
        (
-       tab
-       ,(format "~a ~a ~a ~a;\n" params.type params.size params.name params.default)) ...
-       ,(push-binding params.name) ...
-       )])
+        tab
+        ,(push-binding params.name) ...
+        (
+         ,params.type
+         " "
+         ,params.size
+         " "
+         ,params.name
+         " "
+         ,params.default
+         ";\n") ...))])
+
+
+
 
 (define-syntax-parser ~always-line  
   [(_ expr)
-   (printf "always-line\n")
-   (printf "always line ORIGIN ~a\n" (syntax-property this-syntax 'origin ))
+   ;; (printf "always-line\n")
+   ;; (printf "always line ORIGIN ~a\n" (syntax-property this-syntax 'origin ))
    
    #'expr])
   ;; #:datum-literals (~begin)
@@ -615,12 +685,14 @@
        tab
        "always @("
        
-       ,(format "~a" sens.edge-type)
-       ,(format " ~a" sens.name)
+       ,sens.edge-type
+       " "
+       ,sens.compiled
        (
          " or "
-         ,(format "~a" rest.edge-type)
-         ,(format " ~a" rest.name)
+         ,rest.edge-type
+         " "
+         ,rest.name
        ) ...
        ")\n"
        inc-tab
@@ -632,12 +704,14 @@
    #'`(
        tab
        "always @("
-       ,(format "~a" sens.edge-type)
-       ,(format " ~a" sens.compiled)
+       ,sens.edge-type
+       " " 
+       ,sens.compiled
        (
          " , "
-         ,(format "~a" rest.edge-type)
-         ,(format " ~a"rest.name)) ...
+         ,rest.edge-type
+         " "
+         ,rest.name) ...
        ")\n"
        inc-tab
        ,(~always-line expr ...)
@@ -669,53 +743,48 @@
   #:datum-literals (~set) 
   [(_ (~set [x y] ...))
    #'`((tab
-        ,(format "~a;\n" (~expression (~set x y))))...)]
+        ,(~expression (~set x y))
+        ";\n") ...)]
   [(_ (~set x y))
    #'`(tab
-       ,(format "~a;\n" (~expression (~set x y))))]
+       ,(~expression (~set x y))
+       ";\n")]
   [( _ x)
-   #'x]
-)
+   #'x])
  
-
-
-(define (code-gen input filename)
-  (define tab 0)
-  (define out (open-output-file #:mode 'binary #:exists 'replace filename))
-  (define (aux in)
-    (for ([sym in])
-     
-      (cond
-        [(string? sym)
-         (begin
-
-           (display sym out))]
-        [(eq? 'inc-tab sym) (set! tab (+ 1 tab))]
-        [(eq? 'tab sym)     (display (make-string tab (integer->char 9)) out)]
-        [(eq? 'dec-tab sym) (set! tab (- tab 1))]
-        [(eq? '() sym) '()]
-        [(list? sym) (aux sym)]
-        [else (printf "unknonw ~a\n" sym)
-              ])))
-  (aux input)
-  (close-output-port out))
-
-
 (define-syntax-parser ~module
   [(_ name-sym:id
       (p:param ... last:param)
       expression ... )
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
-;     (printf "moduel\n")
     (push-scoped-stack)
   #'`(
       ,(format "module ~a (\n" name)      
       inc-tab
       ;port declarations
       (tab
-       ,(format "~a ~a ~a ~a,\n" p.direction p.type p.size p.name))...
+       ,p.direction
+       " "
+       ,p.type
+       " "
+       ,p.size
+       " "
+       ,p.name
+       " "
+       ,p.default
+       ",\n") ...
+
       tab
-      ,(format "~a ~a ~a ~a);\n" last.direction last.type last.size last.name)
+      ,last.direction
+      " "
+      ,last.type
+      " "
+      ,last.size
+      " "
+      ,last.name
+      " "
+      ,last.default
+      ");"
       ,(push-binding p.name) ...
       ,(push-binding last.name)
       "\n"
@@ -726,5 +795,24 @@
       ,(pop-scoped-stack)
       )])
   
-  
+(define (code-gen input filename)
+  (define tab 0)
+  (define out (open-output-file #:mode 'binary #:exists 'replace filename))
+  (define (aux in)
+    (for ([sym in])
+     
+      (cond
+        [(or (string? sym) (integer? sym))
+         (begin
+           (display sym out))]
+        [(eq? 'inc-tab sym) (set! tab (+ 1 tab))]
+        [(eq? 'tab sym)     (display (make-string (* 2 tab) #\ ) out)]
+        [(eq? 'dec-tab sym) (set! tab (- tab 1))]
+        [(eq? '() sym) '()]
+        [(list? sym) (aux sym)]
+        [(void? sym) '()]
+        [else (printf "unknonw ~a\n" sym)
+              ])))
+  (aux input)
+  (close-output-port out))  
 (provide (all-defined-out))
