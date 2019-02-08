@@ -31,22 +31,44 @@
 
 
 (begin-for-syntax
-  (define is-always-sens #f)  
+  ; true when expanding inside an always block with a sensitivity list
+  (define is-always-sens #f) 
+  
   (define (toggle-always-sens)
     (set! is-always-sens (not is-always-sens)))
+  
   (define declared-enums (make-hash))
+  
   (define (enum-exists? enum-name)
     (hash-has-key? declared-enums enum-name))
+  
   (define (enum-key-exists? enum-name key)
-    (member (symbol->string key)
-            (map car (hash-ref declared-enums (symbol->string enum-name)))))
+    (let ([enum-name
+           (if (symbol? enum-name)
+               (symbol->string enum-name)
+               enum-name)]
+          [key
+           (if (symbol? key)
+               (symbol->string key)
+               key)])      
+      (member key (map car (hash-ref declared-enums enum-name)))))
+
   (define (get-enum-keys enum-name)
     (map car (hash-ref declared-enums (symbol->string enum-name))))
-  (define (get-enum-value enum-name key)
-    (let* ([pairs (hash-ref declared-enums (symbol->string enum-name))]
-           [pair (memf (λ (p)
-                         (equal? (car p) (symbol->string key))) pairs)])
+
+  (define (get-enum-value enum-name key)    
+    (let* ([enum-name
+           (if (symbol? enum-name)
+               (symbol->string enum-name)
+               enum-name)]
+          [key
+           (if (symbol? key)
+               (symbol->string key)
+               key)]
+           [pairs (hash-ref declared-enums enum-name)]
+           [pair (memf (λ (p) (equal? (car p) key)) pairs)])
       (cdr (car pair))))
+
   (define (add-enum enum-name vals)
     (hash-set! declared-enums (symbol->string enum-name) vals))
 
@@ -62,17 +84,40 @@
              #:with y-evaled (eval (syntax-e (attribute y)))
              #:with pair (cons
                            (format "~a" (syntax-e (attribute x)))
-                           (syntax-e (attribute y-evaled)))
+                           (syntax-e (attribute y-evaled)))))
 
+  (define-syntax-class enum-literal
+    #:description "enum literal in the form enum.value"
+    (pattern x:id
+             #:do
+             [(define split
+                (string-split
+                 (symbol->string (syntax-e (attribute x)))
+                 "."))]
+             #:when (eq? (length split) 2 )
+             #:fail-unless (enum-exists? (car split))
+             (format "the enum ~a does not exist" (car split))
+             #:fail-unless (enum-key-exists? (car split) (car (cdr split)))
+             (format "the value ~a does not exist for enum ~a"
+                     (car (cdr split))
+                     (car split))
+             #:with value (datum->syntax this-syntax (get-enum-value (car split) (car (cdr split))))
+             #:with compiled
+             (datum->syntax this-syntax
+                            (format "~a (~a)" (symbol->string (syntax-e (attribute x)))
+                                    (get-enum-value (car split) (car (cdr split)))))
+             #:with bits (datum->syntax this-syntax (string-length (format "~b" (get-enum-value (car split) (car (cdr split))))))
              ))
+
   
-  (define scoped-bindings-stack (box (list (mutable-set))))
+  (define scoped-bindings-stack (box (list (make-hash))))
   (define (push-scoped-stack)
     (let* ([lst (unbox scoped-bindings-stack)]
-           [new-lst (cons (mutable-set) lst)])
+           [new-lst (cons (make-hash) lst)])
       (set-box! scoped-bindings-stack new-lst)))
     
   (define (pop-scoped-stack)
+
     (let* ([lst (unbox scoped-bindings-stack)]
            [new-lst (cdr lst)])
       (set-box! scoped-bindings-stack new-lst)))
@@ -81,72 +126,96 @@
     (let ([lst (unbox scoped-bindings-stack)])
       (car lst)))
 
-  (define (add-scoped-binding stx-name stx)
+  (define (add-scoped-binding stx-name stx-size stx)
     (let ([name (syntax-e stx-name)]
           [scoped (peek-scoped-stack)])
       (when (and (in-scope? name) (not (equal? name "global")))
         (writeln
          (format "warning: ~a is already in scope at ~a"
                  name (source-location->string stx))))
-      (set-add! scoped name)))
+      (hash-set! scoped name stx-size)))
 
   (define (remove-scoped-binding stx-name)
     (let ([name (syntax-e stx-name)]
           [scoped (peek-scoped-stack)])
-      (set-remove! scoped name)))
+      (hash-remove! scoped name)))
 
   (define (in-scope? name)
-;    (printf "in-scope? ~a \n" name)
+  ;  (printf "in scope ~a\n" name)
     (define (aux lst)
       (cond
-        [(equal? name "global") #t]
         [(empty? lst) #f]
-        [(set-member? (car lst) name) #t]
+        [(hash-has-key? (car lst) name) #t]
         [else (aux (cdr lst))]))
     (aux (unbox scoped-bindings-stack)))
 
+  (define (get-binding-size name)
+    (let ([name2 (if (syntax? name) (symbol->string (syntax-e name)) name)])
+      (define (aux lst)
+
+      (cond
+        [(empty? lst)
+         (begin
+           'none)]
+        [(hash-has-key? (car lst) name2)
+         (begin
+           (hash-ref (car lst) name2))]
+        [else (aux (cdr lst))]))
+      (aux (unbox scoped-bindings-stack))))
+
   (define-syntax-class scoped-binding
     #:description "identifier in scope"
-    #:opaque
+
     (pattern x:id
              #:with name  (symbol->string (syntax-e #'x))
+             #:with name-stx (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
              #:when (in-scope? (symbol->string (syntax-e #'x)))
+             #:with size-int (get-binding-size (symbol->string (syntax-e #'x)))
              ))
 
   (define-syntax-class binding
     #:description "identifier name"
     #:opaque
     (pattern x:id
-             #:with name (symbol->string (syntax-e #'x))
-             ))
-
+             #:with name (symbol->string (syntax-e #'x))))
 
   (define-syntax-class bound-usage
     #:description "identifier in scope with or without size"
-    #:opaque
+
     (pattern s:scoped-binding
              #:with name #'s.name
              #:with size (datum->syntax this-syntax "")
-             #:with compiled (datum->syntax this-syntax (symbol->string (syntax-e (attribute s)))))
-     (pattern [s:scoped-binding x:expr]
+             #:with size-int #'s.size-int
+             #:with compiled   (datum->syntax this-syntax (symbol->string (syntax-e (attribute s))))
+             #:with name-stx #'compiled) ;used in error reporting
+
+    (pattern [s:scoped-binding x:scoped-binding]
              #:with name #'s.name
-             #:with compiled
-             #'`(name "[" ,x "]")
-)   
+             #:with size-int #'1  ; indexing a sngle bit
+             #:with compiled             
+             #'`(name "[" x.name "]")
+             #:with name-stx #'compiled) 
+
+     (pattern [s:scoped-binding x:expr]
+              #:with name #'s.name-stx
+              #:with size-int #'1 ; indexing a single bit
+              #:with compiled
+              #'`(name "[" ,x "]")
+              #:with name-stx #'`(name "[" x "]" )) 
+     
     (pattern [s:scoped-binding x:expr y:expr]
              #:with name #'s.name
+             #:with size-int #'x
              #:with compiled
              #'`(name "[" ,x ":" ,y "]")
-))
-
-
+             #:with name-stx #'compiled)) 
   
   )
 
 (define-syntax (push-binding stx)
   (syntax-parse stx
-    [(_ id)
-     (add-scoped-binding #'id stx)
+    [(_ id size)
+     (add-scoped-binding #'id #'size stx)
   #'(void)]))
 
 (define-syntax (pop-scoped-stack stx)
@@ -161,7 +230,8 @@
     [(_)
      (toggle-always-sens)
   #'(void)]))
-  
+
+
 (begin-for-syntax
   (define (is-hex-literal? str)
     (regexp-match #px"^[$][0-9A-Fa-f_ZzXx]+$" str))
@@ -185,14 +255,22 @@
           #f
           (cdr parsed)))) ; outputs size base negative? value
 
+
+  (define (string-replace-many str from to)
+    (for/fold ([str str])
+              ([f from])
+      (string-replace str f to)))
+
   (define-syntax-class number-literal
     #:datum-literals (_)
     (pattern x:integer
              #:with base 10
-             #:with bits 0 ;todo calc?
+             #:with bits
+             (datum->syntax this-syntax
+               (string-length (format "~b" (syntax-e (attribute x))))) ;easy way out!
              #:with compiled
              (datum->syntax this-syntax
-                            (format "~a" (syntax-e (attribute x)))))
+               (format "~a" (syntax-e (attribute x)))))
     ;hex literals
     (pattern x:id
              #:do [(define str (symbol->string (syntax-e (attribute x))))]
@@ -200,7 +278,8 @@
              #:do [(define cleaned (string-replace
                                     (string-replace str "_" "") "$" ""))]
              #:with base 16
-             #:with bits (* 4 (string-length cleaned) 1)
+             ; for hex, leading zeroes are counted towards the length
+             #:with bits (datum->syntax this-syntax (* 4 (string-length cleaned)))
              #:with compiled
              (datum->syntax this-syntax
                             (format "~a'h~a"
@@ -213,35 +292,50 @@
              #:do [(define cleaned (string-replace
                                     (string-replace str "_" "") "%" ""))]
              #:with base 2
-             #:with bits (string-length cleaned)
+             ; for binary, leading zeroes are counted towards the length
+             #:with bits (datum->syntax this-syntax (string-length cleaned))
              #:with compiled
              (datum->syntax this-syntax
                             (format "~a'b~a"
                                     (syntax-e (attribute bits))
                                     (substring str 1) )))
+
     ;full literal syntax
     (pattern x:id
              #:do [(define str
                      (is-number-literal-candidate?
                       (symbol->string (syntax-e (attribute x)))))]
              #:when (list? str)
-             #:with base 
-             (case (string->number (list-ref str 1))
-               [(2)  "'b"]
-               [(8)  "'o"]
-               [(10) "'d"]
-               [(16) "'h"])
-             #:with bits  (string->number (list-ref str 0))
+             #:do [(define radix (string->number (list-ref str 1)))                     
+                   (define radix-str
+                     (case (string->number (list-ref str 1))
+                       [(2)  "'b"]
+                       [(8)  "'o"]
+                       [(10) "'d"]
+                       [(16) "'h"]))
+                   (define size (string->number (list-ref str 0)))
+                   (define literal (list-ref str 3))]
+             #:with base radix-str
+             #:with bits size
+             #:do [(let* ([n (string-replace-many literal '["X" "x" "Z" "z"]"0")]
+                          [l
+                           ;for all but decimal we count the leading zeroes as well
+                           (case radix
+                             [(2) (string-length n)]
+                             [(8) (* (string-length n) 3)]
+                             [(16) (* (string-length n) 4)]
+                             [(10) (string-length (format "~b" (string->number n 10))
+)])])
+                     (when (> l size)
+                       (printf "\"warning: number literal ~a does not fit into the specified size at ~a\"\n"
+                               (symbol->string (syntax-e (attribute x))) #'x)))]
              #:with compiled
              (datum->syntax this-syntax
                             (format "~a~a~a~a"
                                     (case (list-ref str 2)
                                       [(#f) ""]
                                       [else "-"])
-                                    (syntax-e (attribute bits))
-                                    (syntax-e (attribute base))
-                                    (list-ref str 3)
-                                              ))))
+                                    size radix-str literal))))
   
       
   (define-syntax-class edge-type
@@ -279,7 +373,13 @@
              (if (attribute default-value)
                  #'`(" = " ,(~expression default-value))
                  #'"")
-
+             #:with size-int
+             (cond
+               [(and (attribute x) (attribute y))
+                #'(+ (- x y) 1)]
+               [(attribute x)
+                #'x]
+               [else #'1])
              #:with size
              (cond
                [(and (attribute x) (attribute y))
@@ -300,6 +400,13 @@
              (if (attribute default-value)
                  #'`(" = " ,(~expression default-value))
                  #'"")
+             #:with size-int
+             (cond
+               [(and (attribute x) (attribute y))
+                #'(+ (- x y) 1)]
+               [(attribute x)
+                #'x]
+               [else #'1])
              #:with size
              (cond
                [(and (attribute x) (attribute y))
@@ -315,7 +422,7 @@
    ~+ ~-  ~<< ~>>)
   [(_ x:integer)
    #'x]
-  [(_ x:number-literal)
+  [(_ x:number-literal )
    #'x.compiled]
   [(_ (~delay x y))
    #'`("#" ,(~expression x) " " ,(~expression y))]
@@ -391,17 +498,54 @@
    #'`(,(~expression x)
        " == "
        ,(~expression y))]
-  [(_ (~set x y))
-   #:when is-always-sens
-   #'`(,(~expression x)
-       " <= "
+
+  [(_ (~set (~or x:scoped-binding x:bound-usage) y:number-literal))
+   #:with op (when is-always-sens #'" <= " #'" = ")
+   #'`(
+       ,(when (> y.bits x.size-int)
+          (printf "\"warning: the literal ~a does not fit into ~a and will be truncated\"\n" y.compiled x.name-stx))       
+       ,(~expression x)
+       op
        ,(~expression y))]
+
+  [(_ (~set (~or x:scoped-binding x:bound-usage) y:enum-literal))
+   #:with op (when is-always-sens #'" <= " #'" = ")
+   #'`(
+       ,(when (> y.bits x.size-int)
+          (printf "\"warning: the enum literal ~a does not fit into ~a and will be truncated\"\n" y.compiled x.name-stx))       
+       ,(~expression x)
+       op
+       ,(~expression y))]
+
+  [(_ (~set (~or x:scoped-binding x:bound-usage) (~or y:scoped-binding y:bound-usage)))
+   #:with op (when is-always-sens #'" <= " #'" = ")
+   #'`(
+       ,(when (> y.size-int x.size-int)
+          (printf "\"warning: the expression ~a does not fit into ~a and will be truncated\"\n" y.name-stx x.name-stx))       
+       ,(~expression x)
+       op
+       ,(~expression y))]
+
+  [(_ (~set (~or x:scoped-binding x:bound-usage) y:expr))
+   #:with op (when is-always-sens #'" <= " #'" = ")
+   #:with name (datum->syntax this-syntax (format "~a" #'y))
+   #'`(
+       ,(when (and (number? (~expression y))(> (~expression y) x.size-int))
+          (printf "\"warning: the expression ~a does not fit into ~a and will be truncated\"\n" name x.name-stx))       
+       ,(~expression x)
+       op
+       ,(~expression y))]
+    
   [(_ (~set x y))
-   #'`(,(~expression x)
-       " = "
+   #:with op (when is-always-sens #'" <= " #'" = ")
+   #'`(
+       ,(~expression x)
+       op
        ,(~expression y))]
   [(_ x:bound-usage)
    #'x.compiled]
+  [(_ x:enum-literal)
+   #'x.value]
   ;; [(_ x:binding)
   ;;  #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
   ;;  #'(error x name "is not in scope")]
@@ -409,7 +553,8 @@
   [(_ x:expr)
    #'x]
   
-)
+  )
+
 
 (define-syntax-parser ~begin-or-wrap-expression
   #:datum-literals (~begin ~set ~when ~cond)
@@ -427,10 +572,9 @@
    #'(~begin (~set x y) ...)]
 
   [(_ x:expr)
-;   (printf "!! ~a\n" #'x)
-   #'`(tab
+   #'`(
        ,(~expression x)
-       ";")])
+       )])
 
    
 (define-syntax-parser ~case
@@ -446,7 +590,7 @@
         tab
         ,lhs.compiled
         " : \n"
-        ,(~begin-or-wrap-expression rhs)
+        ,(~begin rhs)
         "\n"
         ) ...
        dec-tab
@@ -475,7 +619,8 @@
        ,(~expression first-test)       
        ")\n"
        inc-tab       
-       ,(~begin-or-wrap-expression first-outcome)
+       ,(~begin first-outcome)
+       dec-tab
        "\n"
         )]
   [(_  [first-test first-outcome] [expr-test expr-outcome] ...)
@@ -485,7 +630,7 @@
        ,(~expression first-test)       
        ")\n"
        inc-tab       
-       ,(~begin-or-wrap-expression first-outcome)
+       ,(~begin first-outcome)
        "\n"
        dec-tab
        (tab
@@ -493,7 +638,7 @@
         ,(~expression expr-test)
         ")\n"
         inc-tab
-        ,(~begin-or-wrap-expression expr-outcome)
+        ,(~begin expr-outcome)
         "\n"
         dec-tab
         "\n") ...                
@@ -610,12 +755,19 @@
        (tab
         ,(~expression (~set x y))
         ";\n")...)]
-  [(_ expr ...)
-   #'`(tab
-       ,(~expression expr ...)
-       ";\n")
-   ;#'(~begin-line (~expression expr ...))
-   ])
+  [(_ (~set x y))
+   #'`(
+       (tab
+        ,(~expression (~set x y))
+        ";\n"))]
+  ;; [(_ expr ...)
+  ;;  (printf "~a\n" #'(expr ...))
+  ;;  #'`(tab
+  ;;      ,(~expression expr ...)
+  ;;      ";\n")
+  ;#'(~begin-line (~expression expr ...))
+  [(_ x:expr) #'x]
+   )
 
 
 (define-syntax-parser ~begin
@@ -652,7 +804,7 @@
    #'`(
        (
         tab
-        ,(push-binding params.name) ...
+        ,(push-binding params.name params.size-int) ...
         (
          ,params.type
          " "
@@ -744,11 +896,11 @@
   [(_ (~set [x y] ...))
    #'`((tab
         ,(~expression (~set x y))
-        ";\n") ...)]
+        "a;\n") ...)]
   [(_ (~set x y))
    #'`(tab
        ,(~expression (~set x y))
-       ";\n")]
+       "b;\n")]
   [( _ x)
    #'x])
  
@@ -785,8 +937,8 @@
       " "
       ,last.default
       ");"
-      ,(push-binding p.name) ...
-      ,(push-binding last.name)
+      ,(push-binding p.name p.size-int) ...
+      ,(push-binding last.name last.size-int)
       "\n"
       dec-tab
       ,(~module-line expression) ...
