@@ -417,6 +417,7 @@
                [(attribute x)
                 #'`("[" ,(- x 1) ": 0" "]")]
                [else #'""]))
+
    (pattern [name-sym:id
               type-option
               (~optional [x (~optional y)])
@@ -533,7 +534,7 @@
        ,(~expression y))]
 
   [(_ (~set (~or x:scoped-binding x:bound-usage) y:number-literal))
-   #:with op (when is-always-sens #'" <= " #'" = ")
+   #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(when (> y.bits x.size-int)
           (printf "\"warning: the literal ~a does not fit into ~a and will be truncated\"\n" y.compiled x.name-stx))       
@@ -542,7 +543,7 @@
        ,(~expression y))]
 
   [(_ (~set (~or x:scoped-binding x:bound-usage) y:enum-literal))
-   #:with op (when is-always-sens #'" <= " #'" = ")
+   #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(when (> y.bits x.size-int)
           (printf "\"warning: the enum literal ~a does not fit into ~a and will be truncated\"\n" y.compiled x.name-stx))       
@@ -551,7 +552,7 @@
        ,(~expression y))]
 
   [(_ (~set (~or x:scoped-binding x:bound-usage) (~or y:scoped-binding y:bound-usage)))
-   #:with op (when is-always-sens #'" <= " #'" = ")
+   #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(when (> y.size-int x.size-int)
           (printf "\"warning: the expression ~a does not fit into ~a and will be truncated\"\n" y.name-stx x.name-stx))       
@@ -560,7 +561,7 @@
        ,(~expression y))]
 
   [(_ (~set (~or x:scoped-binding x:bound-usage) y:expr))
-   #:with op (when is-always-sens #'" <= " #'" = ")
+   #:with op (if is-always-sens #'" <= " #'" = ")
    #:with name (datum->syntax this-syntax (format "~a" #'y))
    #'`(
        ,(when (and (number? (~expression y))(> (~expression y) x.size-int))
@@ -570,7 +571,7 @@
        ,(~expression y))]
     
   [(_ (~set x y))
-   #:with op (when is-always-sens #'" <= " #'" = ")
+   #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(~expression x)
        op
@@ -641,7 +642,7 @@
        tab
        "else\n"
        inc-tab
-       ,(~begin-or-wrap-expression else-outcome)
+       ,(~begin else-outcome)
        "\n"
        dec-tab
        )]
@@ -834,10 +835,6 @@
        "end \n"
        )])
 
-
-
-                
-
 (define-syntax-parser ~locals
   [(_ params:local-param ...)
    #'`(
@@ -853,9 +850,6 @@
          " "
          ,params.default
          ";\n") ...))])
-
-
-
 
 (define-syntax-parser ~always-line  
   [(_ expr)
