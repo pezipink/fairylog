@@ -389,14 +389,43 @@
                [else #'""])))
 
   (define-syntax-class local-param
-    #:datum-literals (:)
-    (pattern [name-sym:id
+    #:datum-literals (: array)
+   (pattern [name-sym:id
               type-option
               (~optional [x (~optional y)])
-              (~optional default-value)]
+              (~optional (array x2:expr (~optional y2)))]
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
              #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
              #:with default
+             (cond
+               [(and (attribute x2) (attribute y2))
+                #'`("[" ,x2 ":" ,y "2]")]
+               [(attribute x2)
+                #'`("[" ,(- x2 1) ": 0" "]")]
+               [else #'""])                     
+             #:with size-int
+             (cond
+               [(and (attribute x) (attribute y))
+                #'(+ (- x y) 1)]
+               [(attribute x)
+                #'x]
+               [else #'1])
+             #:with size
+             (cond
+               [(and (attribute x) (attribute y))
+                #'`("[" ,x ":" ,y "]")]
+               [(attribute x)
+                #'`("[" ,(- x 1) ": 0" "]")]
+               [else #'""]))
+   (pattern [name-sym:id
+              type-option
+              (~optional [x (~optional y)])
+              (~optional
+               default-value:expr)]
+             #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
+             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
+             #:with default
+                     
              (if (attribute default-value)
                  #'`(" = " ,(~expression default-value))
                  #'"")
@@ -413,7 +442,11 @@
                 #'`("[" ,x ":" ,y "]")]
                [(attribute x)
                 #'`("[" ,(- x 1) ": 0" "]")]
-               [else #'""]))))
+               [else #'""]))
+
+
+     
+))
          
 
 (define-syntax-parser ~expression
@@ -769,6 +802,12 @@
   [(_ x:expr) #'x]
    )
 
+(define-syntax-parser ~inc
+  [( _ x:scoped-binding)
+   #'`(tab
+       ,(~expression (~set x (~+ x 1)))
+       ";\n"
+       )])
 
 (define-syntax-parser ~begin
   [(_ block-name:id expr ...+)
