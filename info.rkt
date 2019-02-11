@@ -2,7 +2,7 @@
 
 (define collection "fairylog")
 
-(define version "0.1.0")
+(define version "0.0.1")
 
 (define deps
   '("base"))
@@ -15,6 +15,6 @@
 
 (define pkg-authors '("pezi_pink@pinksquirrellabs.com"))
 
-;(define scribblings '(("scribblings/fairylog.scrbl" ())))
+(define scribblings '(("scribblings/fairylog.scrbl" ())))
 
 

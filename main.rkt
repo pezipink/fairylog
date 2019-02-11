@@ -8,19 +8,15 @@
                     [if r:if]
                     [case r:case]
                     [begin r:begin]
- ;                   [module r:module]
                     [eq? r:eq?]))
 (require (for-syntax racket))
-;(require racket/syntax)
 (require (rename-in "expander.rkt"
                     [~cond cond]
                     [~match match]
                     [~begin begin]
                     [~case case]
-;                    [~module module]
                     [~if if]
                    [~when when]
-                    ;[~eq? eq]
                     ))
 
 (provide ;
@@ -29,11 +25,5 @@
              ;cond
              )
  (for-syntax  (all-from-out racket))
- ;; (combine-out
- ;;     (all-from-out racket/syntax)
- ;;  (except-out
- ;;   (all-from-out racket/base)
- ;;   cond;match
- ;;   )
   (all-from-out "expander.rkt"))
  

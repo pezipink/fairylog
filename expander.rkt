@@ -580,36 +580,12 @@
        ,(expression x)
        op
        ,(expression y))]
-  ;; [(_ x:binding)
-  ;;  #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
-  ;;  #'(error x name "is not in scope")]
 
   [(_ x:expr)
-   (printf "ex ~a\n" #'x)
+;   (printf "ex ~a\n" #'x)
    #'x]
   
   )
-
-
-;; (define-syntax-parser ~begin-or-wrap-expression
-;;   #:datum-literals (~begin set ~when ~cond)
-;;   [(_ (~begin exprs ...))
-;;    #'(~begin exprs ...)]
-;;   [(_ ~begin exprs ...)
-;;    #'(~begin exprs ...)]
-;;   [(_ (~when exprs ...))
-;;    #'(~begin (~when exprs ...))]
-;;   [(_ (~cond exprs ...))
-;;    #'(~cond exprs ...)]
-;;   [(_ ~when exprs ...)
-;;    #'(~when exprs ...)]    
-;;   [(_ (set [x y] ...))
-;;    #'(~begin (set x y) ...)]
-
-;;   [(_ x:expr)
-;;    #'`(
-;;        ,(expression x)
-;;        )])
 
    
 (define-syntax-parser ~case
@@ -1063,46 +1039,14 @@
         [(eq? '() sym) '()]
         [(list? sym) (aux sym)]
         [(void? sym) '()]
-        [else (printf "unknonw ~a\n" sym)
+        [else (printf "unknown ~a\n" sym)
               ])))
   (aux input)
   (close-output-port out))  
 
-
-
 (provide
  (all-defined-out)
-         (except-out (all-from-out syntax/parse/define)
-                     define-syntax-parser
-
-                     )
-         (rename-out
-          [define-syntax-parser macro]
-;;           [~always always]
-
-;;           ;explicty rename some racket/fairy forms 
-;;           [~module module]
-;;           [module r-module]
-
-           ;; [~enum enum]
-           ;; [locals locals]
-
-;           [~match match]
-;          [match r-match]
-
-;           [~cond cond]
-;;           [cond r-cond]
-          
-;;  ;         [~eq? eq?]
-;;           [eq? r-eq?]
-          
-;; ;          [set set]
-;; ;          [set r-set]
-
-;;           [if if]
-;;           [if r-if]
-
-;;           [~when when]
-;;           [when r-when]
-          
-          ))
+ (except-out (all-from-out syntax/parse/define)
+             define-syntax-parser)
+ (rename-out
+  [define-syntax-parser macro]))
