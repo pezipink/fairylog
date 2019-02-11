@@ -356,11 +356,18 @@
 
   (define-syntax-class direction-option
     (pattern #:input)
-    (pattern #:output))
+    (pattern #:output)
+    (pattern #:inout))
 
   (define-syntax-class type-option
     (pattern #:wire)
-    (pattern #:reg))
+    (pattern #:wand)
+    (pattern #:wor)
+    (pattern #:tri)
+    (pattern #:reg)
+    (pattern #:integer)
+    (pattern #:time)
+    (pattern #:real))
     
   (define-syntax-class param
     #:datum-literals (:)
@@ -462,7 +469,7 @@
   [(_ x:bound-usage)
    #'`(
        ,(when x.oob
-         (printf "warning - the expression ~a is out of range.\n" x.compiled))
+         (printf "\"warning - the expression '~a' is out of range.\"\n" x.compiled))
        ,x.compiled)]
   [(_ x:enum-literal)
    #'x.value]
@@ -534,7 +541,7 @@
    #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(when (> y.bits x.size-int)
-          (printf "\"warning: the literal ~a does not fit into ~a and will be truncated\"\n" y.compiled x.name-stx))       
+          (printf "\"warning: the literal '~a' does not fit into '~a' and will be truncated\"\n" y.compiled x.name-stx))       
        ,(expression x)
        op
        ,(expression y))]
@@ -543,7 +550,7 @@
    #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(when (> y.bits x.size-int)
-          (printf "\"warning: the enum literal ~a does not fit into ~a and will be truncated\"\n" y.compiled x.name-stx))       
+          (printf "\"warning: the enum literal '~a' does not fit into '~a' and will be truncated\"\n" y.compiled x.name-stx))       
        ,(expression x)
        op
        ,(expression y))]
@@ -552,7 +559,7 @@
    #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(when (> y.size-int x.size-int)
-          (printf "\"warning: the expression ~a does not fit into ~a and will be truncated\"\n" y.name-stx x.name-stx))       
+          (printf "\"warning: the expression '~a' does not fit into '~a' and will be truncated\"\n" y.name-stx x.name-stx))       
        ,(expression x)
        op
        ,(expression y))]
@@ -562,7 +569,7 @@
    #:with name (datum->syntax this-syntax (format "~a" #'y))
    #'`(
        ,(when (and (number? (expression y))(>= (expression y) x.size-int))
-          (printf "\"warning: the expression ~a does not fit into ~a and will be truncated\"\n" name x.name-stx))       
+          (printf "\"warning: the expression '~a' does not fit into '~a' and will be truncated\"\n" name x.name-stx))       
        ,(expression x)
        op
        ,(expression y))]
@@ -848,15 +855,25 @@
          ,params.default
          ";\n") ...))])
 
+(define-syntax-parser assign 
+  [(_ [x:bound-usage y:expr] ...)
+   #'`(
+       ("assign "
+       ,x.compiled
+       " = "
+       ,(expression y)
+       ";\n") ...  )]
+  [(_ x:bound-usage y:expr)
+   #'`("assign "
+       ,x.compiled
+       " = "
+       ,(expression y)
+       ";\n")])
+
 (define-syntax-parser always-line  
   [(_ expr)
-   ;; (printf "always-line\n")
-   ;; (printf "always line ORIGIN ~a\n" (syntax-property this-syntax 'origin ))
-   
    #'expr])
-  ;; #:datum-literals (~begin)
-  ;; [(_ (~begin name expr ...))
-  ;;  #'(~begin name expr ...)])
+
 
 (define-syntax-parser always
   #:datum-literals (* or)
@@ -1024,6 +1041,12 @@
 (define-syntax-parser initial-begin
   [(_ exprs ...) #'`("initial " ,(~begin exprs ...))])
 
+(define-syntax-parser vfile
+  [(_ filename exprs ...)
+   #'(code-gen
+      (list exprs ...)
+      filename)])
+
 (define (code-gen input filename)
   (define tab 0)
   (define out (open-output-file #:mode 'binary #:exists 'replace filename))
@@ -1044,6 +1067,8 @@
               ])))
   (aux input)
   (close-output-port out))  
+
+
 
 (provide
  (all-defined-out)
