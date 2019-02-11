@@ -11,7 +11,7 @@
   '("scribble-lib"
     "racket-doc"))
 
-(define pkg-desc "Verilog implementation")
+(define pkg-desc "Verilog dialect")
 
 (define pkg-authors '("pezi_pink@pinksquirrellabs.com"))
 
