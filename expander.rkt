@@ -238,6 +238,13 @@
   #'(void)]))
 
 (begin-for-syntax
+  (define (syntax->error-syntax stx)
+    (datum->syntax stx
+    (format "~a:~a:~a"
+            (syntax-source stx)
+            (syntax-line stx)
+            (syntax-column stx))))
+
   (define (is-hex-literal? str)
     (regexp-match #px"^[$][0-9A-Fa-f_ZzXx]+$" str))
 
@@ -331,7 +338,7 @@
                              [(10) (string-length (format "~b" (string->number n 10))
 )])])
                      (when (> l size)
-                       (printf "\"warning: number literal ~a does not fit into the specified size at ~a\"\n"
+                       (printf "warning: number literal ~a does not fit into the specified size at ~a\\n"
                                (symbol->string (syntax-e (attribute x))) #'x)))]
              #:with compiled
              (datum->syntax this-syntax
@@ -371,14 +378,15 @@
     
   (define-syntax-class param
     #:datum-literals (:)
+    #:description "a module parameter"
     (pattern [name-sym:id
-              direction-option
-              type-option
+              direction-opt:direction-option
+              type-opt:type-option
               (~optional [x (~optional y)])
               (~optional default-value)]
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
-             #:with direction (datum->syntax this-syntax (keyword->string (syntax-e #'direction-option)))
-             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
+             #:with direction (datum->syntax this-syntax (keyword->string (syntax-e #'direction-opt)))
+             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-opt)))
              #:with default
              (if (attribute default-value)
                  #'`(" = " ,(expression default-value))
@@ -401,11 +409,11 @@
   (define-syntax-class local-param
     #:datum-literals (: array)
    (pattern [name-sym:id
-              type-option
+              type-opt:type-option
               (~optional [x (~optional y)])
               (~optional (array x2:expr (~optional y2)))]
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
-             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
+             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-opt)))
              #:with default
              (cond
                [(and (attribute x2) (attribute y2))
@@ -429,14 +437,13 @@
                [else #'""]))
 
    (pattern [name-sym:id
-              type-option
+              type-opt:type-option
               (~optional [x (~optional y)])
               (~optional
                default-value:expr)]
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
-             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-option)))
+             #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-opt)))
              #:with default
-                     
              (if (attribute default-value)
                  #'`(" = " ,(expression default-value))
                  #'"")
@@ -467,20 +474,24 @@
   [(_ x:number-literal )
    #'x.compiled]
   [(_ x:bound-usage)
+   #:with err-prefix (syntax->error-syntax #'x)
    #'`(
        ,(when x.oob
-         (printf "\"warning - the expression '~a' is out of range.\"\n" x.compiled))
+         (printf "~a: warning - the expression '~a' is out of range\n" err-prefix x.compiled))
        ,x.compiled)]
   [(_ x:enum-literal)
    #'x.value]
-  [(_ (~delay x y))
+  [(_ (~delay ~! x y))
    #'`("#" ,(expression x) " " ,(expression y))]
-  [(_ (when test true-expr))
+  [(_ (when ~! test true-expr))
    ;special case one-line when in RHS of expression - ternary
    #'(~begin (when test true-expr))]
-  [(_ (concat x y ...+))
+  [(_ (concat ~! x y ...+))
    #'`("{" ,(expression x)  ( ", ",(expression y)) ... "}" )]
-  [(_ (if test true-expr false-expr))
+  [(_ (if  ~!
+           (~describe "condional test for if" test)
+           (~describe "true expression for if" true-expr)
+           (~describe "false expression for if" false-expr)))
    #'`(
        ,(expression test)
        " ? "
@@ -505,9 +516,7 @@
        ,(expression true-expr)
        " : "
        ,(expression def-expr))]
-  [(_ (case val [test true-expr] ...+))
-   ;todo: error handling case when default is not supplied
-   ;this case will not work when the last case (any expression) is enbaled.
+  [(_ (case ~! val [test true-expr] ...+))
    #:fail-when #t "you must supply an else branch of a case when used as an epxression"
    #'(void)]
 
@@ -567,6 +576,7 @@
   [(_ (set (~or x:scoped-binding x:bound-usage) y:expr))
    #:with op (if is-always-sens #'" <= " #'" = ")
    #:with name (datum->syntax this-syntax (format "~a" #'y))
+   
    #'`(
        ,(when (and (number? (expression y))(>= (expression y) x.size-int))
           (printf "\"warning: the expression '~a' does not fit into '~a' and will be truncated\"\n" name x.name-stx))       
@@ -574,7 +584,7 @@
        op
        ,(expression y))]
     
-  [(_ (set x y))
+  [(_ (set ~! x y))
    #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(expression x)
@@ -656,7 +666,9 @@
          )])
 
 (define-syntax-parser ~if
-  [(_ test-expr true-expr false-expr)
+  [(_ (~describe "condional test for if" test-expr)
+      (~describe "true expression for if" true-expr)
+      (~describe "false expression for if" false-expr))
    #'(~cond
       [test-expr true-expr]
       [else false-expr])])
