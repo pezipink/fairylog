@@ -357,9 +357,9 @@
     (pattern [edge:edge-type signal:bound-usage]
              #:with edge-type (datum->syntax this-syntax (keyword->string (syntax-e #'edge)))
              #:with compiled #'signal.compiled)
-    (pattern [signal:id]             
+    (pattern [signal:bound-usage]             
              #:with edge-type (datum->syntax this-syntax "")
-                          #:with compiled #'signal.compiled))
+             #:with compiled #'signal.compiled))
 
   (define-syntax-class direction-option
     (pattern #:input)
