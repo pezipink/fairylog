@@ -879,7 +879,7 @@
          " or "
          ,rest.edge-type
          " "
-         ,rest.name
+         ,rest.compiled
        ) ...
        ")\n"
        inc-tab
@@ -898,7 +898,7 @@
          " , "
          ,rest.edge-type
          " "
-         ,rest.name) ...
+         ,rest.compiled) ...
        ")\n"
        inc-tab
        ,(always-line expr) ...
@@ -947,13 +947,11 @@
    ;; ;; ;todo: show which fields are missing
    ;;  "module instantation does not contain all module fields"
 
-         (printf "in mod init\n")
+;         (printf "in mod init\n")
    (with-syntax([m-name (symbol->string (syntax-e #'m))]
                 [i-name (symbol->string (syntax-e #'x))])
    #'`(
        ,m-name
-       ;; " "
-       ;; ,i-name
        " (\n"
        inc-tab
        (
@@ -963,7 +961,7 @@
        "." ,l.name "(" ,(expression l.value) ")\n" 
        dec-tab
        ");\n"
-       ,(push-binding m.name 'none)
+
        ))]
   [( _ x)
    #'x])
