@@ -113,7 +113,6 @@
     (pattern [port-name:id port-value:bound-usage] 
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'port-name)))       
              #:with value(datum->syntax this-syntax #'port-value.compiled)))
-
   
   (define scoped-bindings-stack (box (list (make-hash))))
   (define (push-scoped-stack)
@@ -131,14 +130,15 @@
     (let ([lst (unbox scoped-bindings-stack)])
       (car lst)))
 
-  (define (add-scoped-binding stx-name stx-size stx)
+  (struct binding-meta ( stx-size stx-arity-list))
+  (define (add-scoped-binding stx-name binding-meta stx)
     (let ([name (syntax-e stx-name)]
           [scoped (peek-scoped-stack)])
       (when (and (in-scope? name) (not (equal? name "global")))
         (writeln
          (format "warning: ~a is already in scope at ~a"
                  name (source-location->string stx))))
-      (hash-set! scoped name stx-size)))
+      (hash-set! scoped name binding-meta)))
 
   (define (remove-scoped-binding stx-name)
     (let ([name (syntax-e stx-name)]
@@ -156,14 +156,26 @@
   (define (get-binding-size name)
     (let ([name2 (if (syntax? name) (symbol->string (syntax-e name)) name)])
       (define (aux lst)
-
       (cond
         [(empty? lst)
          (begin
            'none)]
         [(hash-has-key? (car lst) name2)
          (begin
-           (hash-ref (car lst) name2))]
+           (binding-meta-stx-size (hash-ref (car lst) name2)))]
+        [else (aux (cdr lst))]))
+      (aux (unbox scoped-bindings-stack))))
+
+  (define (get-binding-arities name)
+    (let ([name2 (if (syntax? name) (symbol->string (syntax-e name)) name)])
+      (define (aux lst)
+      (cond
+        [(empty? lst)
+         (begin
+           'none)]
+        [(hash-has-key? (car lst) name2)
+         (begin
+           (binding-meta-stx-arity-list (hash-ref (car lst) name2)))]
         [else (aux (cdr lst))]))
       (aux (unbox scoped-bindings-stack))))
 
@@ -174,15 +186,30 @@
              #:with name-stx (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
              #:when (in-scope? (symbol->string (syntax-e #'x)))
              #:with size-int (get-binding-size (symbol->string (syntax-e #'x)))
-             ))
+             #:with arities (get-binding-arities (symbol->string (syntax-e #'x)))
+             #:with is-array?
+             (let* ([a (get-binding-arities (symbol->string (syntax-e #'x)))]
+                    [b (if (syntax? a)(list?(syntax-e a)) #f)] )
+             (and (syntax? a) (list? (syntax-e a)))
+             )))
 
   (define-syntax-class binding
     #:description "identifier name"
     (pattern x:id
              #:with name (symbol->string (syntax-e #'x))))
 
+  (define-syntax-class inner-usage
+    (pattern x:scoped-binding
+             #:with name #'x.name
+             #:with size-int #'x.size-int
+             #:with compiled
+             #'x.name-stx)
+    (pattern x:expr
+             #:with size-int #'(expression x)
+             #:with compiled #'(expression x)))
+    
   (define-syntax-class bound-usage
-    #:description "identifier in scope with or without size"
+    #:description "identifier in scope with or without size, or array access"
 
     (pattern s:scoped-binding
              #:with name #'s.name
@@ -192,37 +219,104 @@
              #:with compiled   (datum->syntax this-syntax (symbol->string (syntax-e (attribute s))))
              #:with name-stx #'compiled) ;used in error reporting
 
-    (pattern [s:scoped-binding x:scoped-binding]
-             #:with name #'s.name
-             #:with size-int #'1  ; indexing a sngle bit
-             #:with oob #'(> x.size-int s.size-int)
-             #:with compiled
-             #'`(name "[" x.name "]")
-             #:with name-stx #'compiled) 
+    ;arrays:
+    ;when accessing an array, verilog says you must use all the dimensions.
+    ;following that, you can further index into the bits using the normal
+    ;range syntax.
 
-     (pattern [s:scoped-binding x:expr]
-              #:with name #'s.name-stx
-              #:with size-int #'1 ; indexing a single bit
-              #:with oob #'(and (number? x) (>= x s.size-int))
-              #:with compiled
-              #'`(name "[" ,x "]")
-              #:with name-stx #'`(name "[" x "]" )) 
-     
-    (pattern [s:scoped-binding x:expr y:expr]
+    ;to start with no range checking of arrays. but we must still know
+    ;the length of the array to know if they have supplied a range at the
+    ;end or not (up to two expressions)
+    (pattern [s:scoped-binding
+              x:inner-usage ...]
+             #:with x-count (length (syntax->list #'(x ...)))
              #:with name #'s.name
-             #:with size-int #'x
+             #:with size-int #'1
              #:with oob #'#f
              #:with compiled
-             #'`(name "[" ,x ":" ,y "]")
-             #:with name-stx #'compiled)
-    ) 
-  
-  )
+             ;todo: report these errors properly, not using exceptions!!
+             ;todo: range checking on arities.
+             (if (syntax-e #'s.is-array?)
+                 (cond
+                   [(< (syntax-e #'x-count) (length (syntax-e #'s.arities)))
+                    (error "you must specify all the array's dimensions" #'s)]
+                   [(= (syntax-e #'x-count) (length (syntax-e #'s.arities)))
+                    #'`(name  ("[" ,x.compiled  "]") ...)]
+                   [else
+                    (let-values
+                        ([(left right)
+                          (split-at
+                           (syntax->datum #'(x ...))
+                           (length (syntax-e #'s.arities)))])
+                      (printf "l ~a r ~a \n" left right)
+                      (syntax-parse (list left right)
+                        [((z:inner-usage ...) (ya:inner-usage yb:inner-usage))
+                         (printf "here ~a ~a\n" #'ya #'yb)
+                         #'`(name ("[" z.compiled  "]") ...
+                                   "[" ya.compiled " : " yb.compiled "]"
+                                   )]
+                        [((z:inner-usage ...) (ya:inner-usage))
+                         #'`(name ("[" z.compiled  "]") ...
+                                   "[" ya.compiled "]"
+                                   )]
+                        [((z:inner-usage ...) ())
+                         #'`(name ("[" z.compiled  "]") ...)]))])
+                 (cond
+                   [(> (syntax-e #'x-count) 2) (error "not an array\n" #'s)]
+                   [(= (syntax-e #'x-count) 2) 
+                    (syntax-parse #'(x ...)
+                      [(x:inner-usage y:inner-usage)
+                       #'`(name "[" ,x.compiled " : " ,y.compiled "]")])]
+                   [else
+                    #'`(name ("[" ,x.compiled  "]") ...)]))
+                   
+             #:with name-stx #'compiled) 
+
+             
+             
+    
+               
+    
+    ;; (pattern [s:scoped-binding x:scoped-binding]
+    ;;          #:with name #'s.name
+    ;;          ; indexing a sngle bit or element, return the right size if
+    ;;          ; 
+    ;;          #:with size-int #'1 
+    ;;          #:with oob #'(> x.size-int s.size-int)
+    ;;          #:with compiled
+    ;;          #'`(name "[" x.name "]")
+    ;;          #:with name-stx #'compiled) 
+
+    ;; ;; (pattern [s:scoped-binding x:expr ...+]
+    ;; ;;          #:with name #'s.name-stx
+    ;; ;;          #:with size-int ; this is used in the bounds checking.
+    
+    ;;  (pattern [s:scoped-binding x:expr]
+    ;;           #:with name #'s.name-stx
+    ;;           #:with size-int
+              
+    ;;           #'1 ; indexing a single bit or element
+    ;;           #:with oob #'(and (number? (expression x)) (>= (expression x) s.size-int))
+    ;;           #:with compiled
+    ;;           #'`(name "[" ,(expression x) "]")
+    ;;           #:with name-stx #'`(name "[",(expression x) "]" )) 
+     
+    ;; (pattern [s:scoped-binding x:expr y:expr]
+    ;;          #:with name #'s.name
+    ;;          #:with size-int #'x
+    ;;          #:with oob #'#f
+    ;;          #:with compiled
+    ;;          #'`(name "[" ,(expression x) ":" ,(expression y)"]")
+    ;;          #:with name-stx #'compiled)
+    ))
 
 (define-syntax (push-binding stx)
   (syntax-parse stx
     [(_ id size)
-     (add-scoped-binding #'id #'size stx)
+     (add-scoped-binding #'id (binding-meta #'size #'#f) stx)
+     #'(void)]
+        [(_ id size arity-list)
+     (add-scoped-binding #'id (binding-meta #'size #'arity-list) stx)
      #'(void)]))
 
 (define-syntax (pop-scoped-stack stx)
@@ -377,7 +471,6 @@
     (pattern #:real))
     
   (define-syntax-class param
-    #:datum-literals (:)
     #:description "a module parameter"
     (pattern [name-sym:id
               direction-opt:direction-option
@@ -407,20 +500,30 @@
                [else #'""])))
 
   (define-syntax-class local-param
-    #:datum-literals (: array)
+    #:datum-literals (array)   
    (pattern [name-sym:id
               type-opt:type-option
-              (~optional [x (~optional y)])
-              (~optional (array x2:expr (~optional y2)))]
+              [x (~optional y)]
+              (~optional (array x2:expr ...+))]
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
              #:with type (datum->syntax this-syntax (keyword->string (syntax-e #'type-opt)))
-             #:with default
+             #:with default ;arrays dont have defaults, instead the
+                            ;additional array syntax appears here.
              (cond
-               [(and (attribute x2) (attribute y2))
-                #'`("[" ,x2 ":" ,y "]")]
-               [(attribute x2)
-                #'`("[ 0 :" ,(- x2 1) "]")]
+               [(and (attribute x2))
+                #'`(
+                    (
+                     "[0:" ,(- x2 1) "]"
+                    ) ...
+                    )]
                [else #'""])                     
+             
+             #:with arity-list
+             (if (attribute x2)
+                 (syntax->list #'(x2 ...))
+                 #'#f)
+             
+             ; actual data size, not array dimensions.
              #:with size-int
              (cond
                [(and (attribute x) (attribute y))
@@ -447,20 +550,22 @@
              (if (attribute default-value)
                  #'`(" = " ,(expression default-value))
                  #'"")
-             #:with size-int
+             #:with arity-list #'#f
+             #:with size-int 
              (cond
                [(and (attribute x) (attribute y))
                 #'(+ (- x y) 1)]
                [(attribute x)
                 #'x]
                [else #'1])
-             #:with size
+             #:with size 
              (cond
                [(and (attribute x) (attribute y))
                 #'`("[" ,x ":" ,y "]")]
                [(attribute x)
                 #'`("[" ,(- x 1) ": 0" "]")]
-               [else #'""]))
+               [else #'""])
+               )
      
 ))
          
@@ -528,13 +633,14 @@
   ; binary  
   [(_ ( (~and op (~or + - * / % << >> == != <= >= && & \|\| \| ^ ~^)) x y ))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
-      #'`(
-          ,(expression x)
-          " "
-          ,op-str
-          " "
-          ,(expression y)
-)]
+   #'`(
+       "("
+       ,(expression x)
+       " "
+       ,op-str
+       " "
+       ,(expression y)
+       ")")]
   [(_ ( (~and op (~or + - * / % << >> == != <= >= && & \|\| \| ^ ~^)) x y z ... ))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
       #'`(
@@ -576,7 +682,6 @@
   [(_ (set (~or x:scoped-binding x:bound-usage) y:expr))
    #:with op (if is-always-sens #'" <= " #'" = ")
    #:with name (datum->syntax this-syntax (format "~a" #'y))
-   
    #'`(
        ,(when (and (number? (expression y))(>= (expression y) x.size-int))
           (printf "\"warning: the expression '~a' does not fit into '~a' and will be truncated\"\n" name x.name-stx))       
@@ -585,7 +690,9 @@
        ,(expression y))]
     
   [(_ (set ~! x y))
+
    #:with op (if is-always-sens #'" <= " #'" = ")
+
    #'`(
        ,(expression x)
        op
@@ -832,7 +939,7 @@
    #'`(
        (
         tab
-        ,(push-binding params.name params.size-int) ...
+        ,(push-binding params.name params.size-int params.arity-list) ...
         (
          ,params.type
          " "
@@ -861,7 +968,6 @@
 (define-syntax-parser always-line  
   [(_ expr)
    #'expr])
-
 
 (define-syntax-parser always
   #:datum-literals (* or)
@@ -938,7 +1044,7 @@
   [(_ (vmod m:id  ~! p:module-param ... l:module-param ~!))
 
    #:fail-unless (module-exists? (symbol->string (syntax-e #'m)))
-   "the module doesn't exist"
+   (format "the module '~a' doesn't exist"(symbol->string (syntax-e #'m)))
 
 ;   #:fail-unless
    ;; (andmap (λ (lst) (module-has-port?  (symbol->string (syntax-e #'m)) lst))
@@ -947,7 +1053,7 @@
    ;; ;; ;todo: show which fields are missing
    ;;  "module instantation does not contain all module fields"
 
-;         (printf "in mod init\n")
+         (printf "in mod init\n")
    (with-syntax([m-name (symbol->string (syntax-e #'m))]
                 [i-name (symbol->string (syntax-e #'x))])
    #'`(
@@ -1051,8 +1157,10 @@
         [(void? sym) '()]
         [else (printf "unknown ~a\n" sym)
               ])))
+  (printf "generating file ~a ... \n" filename)
   (aux input)
-  (close-output-port out))  
+  (close-output-port out)
+    (printf "finished.\n"))
 
 (provide
  (all-defined-out)
