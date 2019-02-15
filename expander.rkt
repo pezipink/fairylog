@@ -205,8 +205,8 @@
              #:with compiled
              #'x.name-stx)
     (pattern x:expr
-             #:with size-int #'(expression x)
-             #:with compiled #'(expression x)))
+             #:with size-int #'x
+             #:with compiled #'x))
     
   (define-syntax-class bound-usage
     #:description "identifier in scope with or without size, or array access"
@@ -228,11 +228,11 @@
     ;the length of the array to know if they have supplied a range at the
     ;end or not (up to two expressions)
     (pattern [s:scoped-binding
-              x:inner-usage ...]
+              x:inner-usage ...+]
              #:with x-count (length (syntax->list #'(x ...)))
              #:with name #'s.name
-             #:with size-int #'1
-             #:with oob #'#f
+             
+             #:with oob #'#f ;todo; out of bounds checks
              #:with compiled
              ;todo: report these errors properly, not using exceptions!!
              ;todo: range checking on arities.
@@ -246,12 +246,10 @@
                     (let-values
                         ([(left right)
                           (split-at
-                           (syntax->datum #'(x ...))
+                           (syntax->list #'(x ...))
                            (length (syntax-e #'s.arities)))])
-                      (printf "l ~a r ~a \n" left right)
                       (syntax-parse (list left right)
                         [((z:inner-usage ...) (ya:inner-usage yb:inner-usage))
-                         (printf "here ~a ~a\n" #'ya #'yb)
                          #'`(name ("[" z.compiled  "]") ...
                                    "[" ya.compiled " : " yb.compiled "]"
                                    )]
@@ -270,7 +268,40 @@
                    [else
                     #'`(name ("[" ,x.compiled  "]") ...)]))
                    
-             #:with name-stx #'compiled) 
+             #:with name-stx #'compiled
+
+             #:with size-int 
+             ;since it is not possible to compile an array expression without
+             ;all the indexes, we need only return the atual data size
+             ;OR whatever the range equates to.  for non-arrays, the size will
+             ;be either one for a signle bit select or the size of the range.
+
+             (if (syntax-e #'s.is-array?)
+                 (let-values
+                     ([(left right)
+                       (split-at (syntax->list #'(x ...))
+                                 (length (syntax-e #'s.arities)))])
+                      (syntax-parse (list left right)
+                        [((z:inner-usage ...) (msb:inner-usage lsb:inner-usage))
+                         #'(+ (- msb.size-int lsb.size-int) 1)]
+                        [((z:inner-usage ...) (ya:inner-usage))
+                         ;single bit
+                         #'1]
+                        [((z:inner-usage ...) ())
+                         ;indexed - return size of array data                         
+                         #'s.size-int]))                 
+                 (syntax-parse #'(x ...)
+                   [(msb:inner-usage lsb:inner-usage)
+                    (printf "here size is ~a ~a \n" #'msb.size-int #'lsb.size-int
+                           )
+                    #'(+ (- msb.size-int lsb.size-int) 1)]
+                   [(x:inner-usage)
+                    #'1])
+                   
+             ))
+
+
+    
 
              
              
@@ -564,10 +595,7 @@
                 #'`("[" ,x ":" ,y "]")]
                [(attribute x)
                 #'`("[" ,(- x 1) ": 0" "]")]
-               [else #'""])
-               )
-     
-))
+               [else #'""]))))
          
 
 (define-syntax-parser expression
@@ -652,6 +680,7 @@
           ,(expression (op y z ...))
           ")) " )]
 
+  ;setters and bounds / truncation checking
   [(_ (set (~or x:scoped-binding x:bound-usage) y:number-literal))
    #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
@@ -690,9 +719,7 @@
        ,(expression y))]
     
   [(_ (set ~! x y))
-
    #:with op (if is-always-sens #'" <= " #'" = ")
-
    #'`(
        ,(expression x)
        op
@@ -1144,7 +1171,6 @@
   (define out (open-output-file #:mode 'binary #:exists 'replace filename))
   (define (aux in)
     (for ([sym in])
-     
       (cond
         [(or (string? sym) (integer? sym))
          (begin
