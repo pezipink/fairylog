@@ -35,7 +35,7 @@
           [key
            (if (symbol? key)
                (symbol->string key)
-               key)])      
+               key)])
       (member key (map car (hash-ref declared-enums enum-name)))))
 
   (define (get-enum-keys enum-name)
@@ -55,6 +55,9 @@
       (cdr (car pair))))
 
   (define (add-enum enum-name vals)
+    (printf "enum ~a\n" (symbol->string enum-name) )
+    (for ([kvp vals])
+      (printf "~a : ~x\n" (car kvp) (cdr kvp)))
     (hash-set! declared-enums (symbol->string enum-name) vals))
 
   (define-syntax-class enum
@@ -99,10 +102,13 @@
   (struct module-meta (name ports) #:transparent)
   (define module-metadata (make-hash))
   (define (add-module name ports)
+    (printf "adding module ~a\n" name)
+    (printf "~a\n" (hash-keys module-metadata))
     (if (hash-has-key? module-metadata name)
         (error "module ~a already exists" name)
         (hash-set! module-metadata name (module-meta name ports))))
   (define (module-exists? name)
+    (printf "exists ~a ?\n" name)
     (hash-has-key? module-metadata name))
   (define (module-has-port? module-name port-name)
     (memf (λ (port) (equal? (port-meta-name port) port-name))
@@ -205,8 +211,8 @@
              #:with compiled
              #'x.name-stx)
     (pattern x:expr
-             #:with size-int #'x
-             #:with compiled #'x))
+             #:with size-int #'(expression x)
+             #:with compiled #'(expression x)))
     
   (define-syntax-class bound-usage
     #:description "identifier in scope with or without size, or array access"
@@ -292,21 +298,14 @@
                          #'s.size-int]))                 
                  (syntax-parse #'(x ...)
                    [(msb:inner-usage lsb:inner-usage)
-                    (printf "here size is ~a ~a \n" #'msb.size-int #'lsb.size-int
-                           )
+;                    (printf "here size is ~a ~a \n" #'msb.size-int #'lsb.size-int
+                           ;)
                     #'(+ (- msb.size-int lsb.size-int) 1)]
                    [(x:inner-usage)
                     #'1])
                    
              ))
 
-
-    
-
-             
-             
-    
-               
     
     ;; (pattern [s:scoped-binding x:scoped-binding]
     ;;          #:with name #'s.name
@@ -456,10 +455,12 @@
              #:do [(let* ([n (string-replace-many literal '["X" "x" "Z" "z"]"0")]
                           [l
                            ;for all but decimal we count the leading zeroes as well
+                           ;todo: this needs work, probably want tot just parse and count binary  instead?
                            (case radix
                              [(2) (string-length n)]
                              [(8) (* (string-length n) 3)]
-                             [(16) (* (string-length n) 4)]
+                             [(16) (string-length (format "~b" (string->number n 16))
+)]
                              [(10) (string-length (format "~b" (string->number n 10))
 )])])
                      (when (> l size)
@@ -601,7 +602,7 @@
 (define-syntax-parser expression
   #:datum-literals
   (set ~delay if case else when concat
-   \|\| \| \~\| ! ~ + - * / % << >> == != >= <= && & ~&  ^ ~^ )
+   \|\| \| \~\| ! ~ + - * / % << >> == != >= <= < > && & ~&  ^ ~^ )
   [(_ x:integer)
    #'x]
   [(_ x:number-literal )
@@ -635,16 +636,16 @@
              [test true-expr]
              [test2 expr2] ...+
              [else def-expr]))
-   #'`("~a ? ~a : ~a"              
-       ,(expression (eq? val test))
+   #'`(
+       ,(expression (== val test))
        " ? "
        ,(expression true-expr)
        " : "
-       ,(expression (~case val [test2 expr2] ... [else def-expr])))]
+       ,(expression (case val [test2 expr2] ... [else def-expr])))]
   [(_ (case val [test true-expr]
                  [else def-expr]))
    #'`(
-       ,(expression (eq? val test))
+       ,(expression (== val test))
        " ? "
        ,(expression true-expr)
        " : "
@@ -659,7 +660,7 @@
    #'`(,op-str  ,(expression x))]
 
   ; binary  
-  [(_ ( (~and op (~or + - * / % << >> == != <= >= && & \|\| \| ^ ~^)) x y ))
+  [(_ ( (~and op (~or + - * / % << >> == != < > <= >= && & \|\| \| ^ ~^)) x y ))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
    #'`(
        "("
@@ -750,6 +751,29 @@
         ) ...
        dec-tab
        tab
+       "endcase\n")]
+  [(_ test:bound-usage [lhs:number-literal rhs] ...
+      [else else-expr:expr])
+   #'`(
+       tab
+       "case ("
+       ,test.compiled
+       ")\n"
+       inc-tab
+       (
+        tab
+        ,lhs.compiled
+        " : \n"
+        ,(~begin rhs)
+        "\n"
+        ) ...
+
+       tab
+       "default : \n"
+       ,(~begin else-expr)
+       "\n"
+       dec-tab
+       tab
        "endcase\n")])
 
 (define-syntax-parser ~cond
@@ -812,6 +836,11 @@
    #'(~cond
       [test-expr true-expr])])
 
+(define-syntax-parser list->enum
+  [(_ name vals)
+   (add-enum (syntax-e #'name) (eval #'vals))
+   #'(void)])
+
 (define-syntax-parser enum
   [(_ name kvp:enum-kvp ...+)
    
@@ -822,7 +851,19 @@
                 (syntax->datum #'(kvp.y-evaled ...)))
    "duplicate enum value"   
    (add-enum (syntax-e #'name) (syntax->datum #'(kvp.pair ...)))
-   #'(void)])
+   #'(void)]
+  [(_ name keys:id ...+)
+   #:fail-when (check-duplicate-identifier
+                (syntax->list #'(keys ...)))
+   "duplicate enum name"
+   (with-syntax
+     ([(kvps ...)
+       (for/list
+           ([n (in-naturals)]
+            [x (syntax->list #'(keys ...))])
+         (cons (format "~a" (syntax-e x)) n))])
+   (add-enum (syntax-e #'name)(syntax->datum #'(kvps ...)))
+   #'(void))])
 
 (define-syntax-parser ~match-set
   [(_ target:bound-usage test:expr enum-name:enum
@@ -889,20 +930,6 @@
 
 (define-syntax-parser ~begin-line
   #:datum-literals (~cond locals expression ~when if set ~match-set ~match ~case-set)  
-  ;; [(_ (~cond expr  ...))
-  ;;  #'(~cond expr ...)]
-  ;; [(_ (~when expr  ...))
-  ;;  #'(~when expr ...)]
-  ;; [(_ (if expr  ...))
-  ;;  #'(if expr ...)]  
-  ;; [(_ (locals params ...))
-  ;;  #'(locals params ...)]
-  ;; [(_ (~match-set expr ...))
-  ;;  #'(~match-set expr ...)]
-  ;; [(_ (~match expr ...))
-  ;;  #'(~match expr ...)]
-  ;; [(_ (~case-set expr ...))
-  ;;     #'(~case-set expr ...)]
   [(_ (expression expr ...))
    #'`(tab
        ,(expression expr ...)
@@ -917,17 +944,8 @@
        (tab
         ,(expression (set x y))
         ";\n"))]
-  ;; [(_ expr ...)
-  ;;  (printf "~a\n" #'(expr ...))
-  ;;  #'`(tab
-  ;;      ,(expression expr ...)
-  ;;      ";\n")
-  ;#'(~begin-line (expression expr ...))
   [(_ x:expr)
-   #'x]
-
-
-   )
+   #'x]   )
 
 (define-syntax-parser ~inc
   [( _ x:scoped-binding)
@@ -1056,7 +1074,6 @@
        ,(always-line expr) ...
        dec-tab
        )])
-
 
 (define-syntax-parser ~module-line
   #:datum-literals (set vmod) 
@@ -1189,7 +1206,9 @@
     (printf "finished.\n"))
 
 (provide
+
  (all-defined-out)
+ (for-syntax  (all-defined-out))
  (except-out (all-from-out syntax/parse/define)
              define-syntax-parser)
  (rename-out

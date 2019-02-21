@@ -9,7 +9,9 @@
                     [case r:case]
                     [begin r:begin]
                     [eq? r:eq?]))
-(require (for-syntax racket))
+(require (for-syntax racket 
+;"expander.rkt"
+))
 (require (rename-in "expander.rkt"
                     [~cond cond]
                     [~match match]
@@ -24,6 +26,9 @@
  (except-out (all-from-out racket)
              ;cond
              )
- (for-syntax  (all-from-out racket))
+ (for-syntax  (all-from-out racket)
+;              (all-from-out "expander.rkt")
+)
+ 
   (all-from-out "expander.rkt"))
  
