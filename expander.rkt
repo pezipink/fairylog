@@ -305,39 +305,6 @@
                     #'1])
                    
              ))
-
-    
-    ;; (pattern [s:scoped-binding x:scoped-binding]
-    ;;          #:with name #'s.name
-    ;;          ; indexing a sngle bit or element, return the right size if
-    ;;          ; 
-    ;;          #:with size-int #'1 
-    ;;          #:with oob #'(> x.size-int s.size-int)
-    ;;          #:with compiled
-    ;;          #'`(name "[" x.name "]")
-    ;;          #:with name-stx #'compiled) 
-
-    ;; ;; (pattern [s:scoped-binding x:expr ...+]
-    ;; ;;          #:with name #'s.name-stx
-    ;; ;;          #:with size-int ; this is used in the bounds checking.
-    
-    ;;  (pattern [s:scoped-binding x:expr]
-    ;;           #:with name #'s.name-stx
-    ;;           #:with size-int
-              
-    ;;           #'1 ; indexing a single bit or element
-    ;;           #:with oob #'(and (number? (expression x)) (>= (expression x) s.size-int))
-    ;;           #:with compiled
-    ;;           #'`(name "[" ,(expression x) "]")
-    ;;           #:with name-stx #'`(name "[",(expression x) "]" )) 
-     
-    ;; (pattern [s:scoped-binding x:expr y:expr]
-    ;;          #:with name #'s.name
-    ;;          #:with size-int #'x
-    ;;          #:with oob #'#f
-    ;;          #:with compiled
-    ;;          #'`(name "[" ,(expression x) ":" ,(expression y)"]")
-    ;;          #:with name-stx #'compiled)
     ))
 
 (define-syntax (push-binding stx)
@@ -626,30 +593,35 @@
            (~describe "condional test for if" test)
            (~describe "true expression for if" true-expr)
            (~describe "false expression for if" false-expr)))
-   #'`(
+   #'`("("
        ,(expression test)
        " ? "
        ,(expression true-expr)
        " : "
-       ,(expression false-expr))]
+       ,(expression false-expr)
+       ")")]
   [(_ (case val
              [test true-expr]
              [test2 expr2] ...+
              [else def-expr]))
    #'`(
+       "("
        ,(expression (== val test))
        " ? "
        ,(expression true-expr)
        " : "
-       ,(expression (case val [test2 expr2] ... [else def-expr])))]
+       ,(expression (case val [test2 expr2] ... [else def-expr]))
+       ")")]
   [(_ (case val [test true-expr]
                  [else def-expr]))
    #'`(
+       "("
        ,(expression (== val test))
        " ? "
        ,(expression true-expr)
        " : "
-       ,(expression def-expr))]
+       ,(expression def-expr)
+       ")")]
   [(_ (case ~! val [test true-expr] ...+))
    #:fail-when #t "you must supply an else branch of a case when used as an epxression"
    #'(void)]
@@ -1174,6 +1146,10 @@
   [(_ clock exprs ...)
    #'(always ([#:posedge clock]) (~begin exprs ...))])
 
+(define-syntax-parser always-neg
+  [(_ clock exprs ...)
+   #'(always ([#:negedge clock]) (~begin exprs ...))])
+
 (define-syntax-parser initial-begin
   [(_ exprs ...) #'`("initial " ,(~begin exprs ...))])
 
@@ -1182,6 +1158,33 @@
    #'(code-gen
       (list exprs ...)
       filename)])
+(require (for-syntax (file "c:\\repos\\seed\\seed-common.rkt")))
+(require (file "c:\\repos\\seed\\seed-common.rkt"))
+
+;; (define-syntax-parser generate-instructions
+;;   ;cpu instructions have several common features which can be inferred.
+;;   ;all instructions increase the PC by 1 + operand size (in metadata)
+;;   ;some instructions require multiple cycles for accessing memory and stuff.
+;;   ;opcode phases should be generated automatically, one for each set of exprs
+;;   ;lots of instructions read the next 2 memory slots as a read or write address.
+;;   ;lots of instructions load the next 2-4 memory slots as immediate data into
+;;   ;some register.
+;;   ;some opcodes are unique and full control should be allowed
+;;        [(_ cpu_pc:scoped-binding
+;;            [oc:id  ([phase-impl:expr] ... [last-impl:expr])]  )
+;;         ;; #:fail-unless (hash-has-key? seed-opcode-lookup (syntax-e #'opcode))
+;;         ;; (format "the opcode ~a is invalid" #'opcode)
+;;         #:with pc_inc
+;;            #'(expression (set cpu_pc (+ cpu_pc (opcode-size (syntax-e #'oc)))))
+
+;;         #'
+;;                   (~begin
+;;                     phase-impl ...
+;;                     last-impl
+;;                     pc_inc
+;;             )
+
+;;         ])
 
 (define (code-gen input filename)
   (define tab 0)
