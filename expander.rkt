@@ -23,7 +23,11 @@
     (set! is-always-sens (not is-always-sens)))
   
   (define declared-enums (make-hash))
-  
+
+  (define current-module "")
+  (define (set-current-module name)
+    (printf "setting current module ~a\n" name)
+    (set! current-module name))
   (define (enum-exists? enum-name)
     (hash-has-key? declared-enums enum-name))
   
@@ -99,20 +103,29 @@
 
 
   (struct port-meta (name direction type) #:transparent)
-  (struct module-meta (name ports) #:transparent)
+  (struct func-meta (name size-int) #:transparent #:mutable)
+  (struct module-meta (name ports functions) #:transparent #:mutable)
   (define module-metadata (make-hash))
   (define (add-module name ports)
     (printf "adding module ~a\n" name)
     (printf "~a\n" (hash-keys module-metadata))
     (if (hash-has-key? module-metadata name)
         (error "module ~a already exists" name)
-        (hash-set! module-metadata name (module-meta name ports))))
+        (hash-set! module-metadata name (module-meta name ports '()))))
   (define (module-exists? name)
     (printf "exists ~a ?\n" name)
     (hash-has-key? module-metadata name))
   (define (module-has-port? module-name port-name)
     (memf (λ (port) (equal? (port-meta-name port) port-name))
           (module-meta-ports (hash-ref module-metadata module-name))))
+  (define (module-has-function? module-name function-name)
+    (memf (λ (func) (equal? (func-meta-name func) function-name))
+          (module-meta-functions (hash-ref module-metadata module-name))))
+  (define (add-module-function module-name function-name size)
+    (let* ([mod (hash-ref module-metadata module-name)]
+           [fs (module-meta-functions mod)])
+      (set-module-meta-functions! mod (cons (func-meta function-name size) fs))))
+
   
   (define-syntax-class module-param
     #:description "a module initializer"
@@ -204,6 +217,14 @@
     (pattern x:id
              #:with name (symbol->string (syntax-e #'x))))
 
+  (define-syntax-class scoped-function
+    (pattern x:id
+             #:with name (symbol->string (syntax-e #'x))
+             #:with name-stx (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
+             #:when (module-has-function? current-module (symbol->string (syntax-e #'x)))
+             )
+    )
+             
   (define-syntax-class inner-usage
     (pattern x:scoped-binding
              #:with name #'x.name
@@ -468,8 +489,32 @@
     (pattern #:integer)
     (pattern #:time)
     (pattern #:real))
-    
-  (define-syntax-class param
+
+    (define-syntax-class function-param
+    #:description "a function parameter"
+    (pattern [name-sym:id
+              (~optional [x (~optional y)])]
+             #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
+             #:with direction (datum->syntax this-syntax "input")
+             #:with type (datum->syntax this-syntax "wire")
+             #:with arity-list #'#f
+             #:with default #'""
+             #:with size-int
+             (cond
+               [(and (attribute x) (attribute y))
+                #'(+ (- x y) 1)]
+               [(attribute x)
+                #'x]
+               [else #'1])
+             #:with size
+             (cond
+               [(and (attribute x) (attribute y))
+                #'`("[" ,x ":" ,y "]")]
+               [(attribute x)
+                #'`("[" ,(- x 1) ":0"  "]")]
+               [else #'""])))
+
+    (define-syntax-class param
     #:description "a module parameter"
     (pattern [name-sym:id
               direction-opt:direction-option
@@ -582,6 +627,12 @@
        ,x.compiled)]
   [(_ x:enum-literal)
    #'x.value]
+  [(_ (f:scoped-function ~! params ... last-param))
+   #'`(
+       ,f.name-stx "("
+       ( ,(expression params ) ",") ...
+       ,(expression last-param)
+       ")")]       
   [(_ (~delay ~! x y))
    #'`("#" ,(expression x) " " ,(expression y))]
   [(_ (when ~! test true-expr))
@@ -1087,13 +1138,58 @@
        ))]
   [( _ x)
    #'x])
- 
+
+(define-syntax-parser function
+  [(_ (~optional [x (~optional y)])
+      name-sym:id
+       ; output size
+      (p:function-param ...) 
+      expression ...)
+   #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
+   #:with size-int
+   (cond
+     [(and (attribute x) (attribute y))
+      #'(+ (- x y) 1)]
+     [(attribute x)
+      #'x]
+     [else #'1])
+   #:with size
+   (cond
+     [(and (attribute x) (attribute y))
+      #'`("[" ,x ":" ,y "]")]
+     [(attribute x)
+      #'`("[" ,(- x 1) ":0"  "]")]
+     [else #'""])
+   (push-scoped-stack)
+   (add-module-function current-module (symbol->string (syntax-e #'name-sym))
+                        (syntax-e #'size-int))
+   #'`("function " ,size " " ,name ";\n"
+       inc-tab
+       tab
+       ;push the name and size of the function as it is used
+       ;to set the return value. sticking to Verilog style for now.
+       ,(push-binding name size-int #f)
+       ,(push-binding p.name p.size-int p.arity-list) ...
+       (tab
+        ,p.direction
+        " "
+        ,p.size
+        " "
+        ,p.name
+        ";\n") ...       
+       ,(~begin
+          expression ...)
+       dec-tab
+       ,(pop-scoped-stack)
+       "endfunction\n")])
+
 (define-syntax-parser vmod
   [(_ name-sym:id
       (p:param ... last:param) ;inputs
       expression ... )
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'name-sym)))
    (push-scoped-stack)
+   (set-current-module (symbol->string (syntax-e #'name-sym)))
    (add-module (syntax-e #'name)
                (map (λ (lst)
                       (port-meta
