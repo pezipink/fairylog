@@ -1262,33 +1262,6 @@
    #'(code-gen
       (list exprs ...)
       filename)])
-(require (for-syntax (file "c:\\repos\\seed\\seed-common.rkt")))
-(require (file "c:\\repos\\seed\\seed-common.rkt"))
-
-;; (define-syntax-parser generate-instructions
-;;   ;cpu instructions have several common features which can be inferred.
-;;   ;all instructions increase the PC by 1 + operand size (in metadata)
-;;   ;some instructions require multiple cycles for accessing memory and stuff.
-;;   ;opcode phases should be generated automatically, one for each set of exprs
-;;   ;lots of instructions read the next 2 memory slots as a read or write address.
-;;   ;lots of instructions load the next 2-4 memory slots as immediate data into
-;;   ;some register.
-;;   ;some opcodes are unique and full control should be allowed
-;;        [(_ cpu_pc:scoped-binding
-;;            [oc:id  ([phase-impl:expr] ... [last-impl:expr])]  )
-;;         ;; #:fail-unless (hash-has-key? seed-opcode-lookup (syntax-e #'opcode))
-;;         ;; (format "the opcode ~a is invalid" #'opcode)
-;;         #:with pc_inc
-;;            #'(expression (set cpu_pc (+ cpu_pc (opcode-size (syntax-e #'oc)))))
-
-;;         #'
-;;                   (~begin
-;;                     phase-impl ...
-;;                     last-impl
-;;                     pc_inc
-;;             )
-
-;;         ])
 
 (define (code-gen input filename)
   (define tab 0)
