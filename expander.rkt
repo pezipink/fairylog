@@ -200,10 +200,12 @@
 
   (define-syntax-class scoped-binding
     #:description "identifier in scope"
+    #:commit
     (pattern x:id
              #:with name  (symbol->string (syntax-e #'x))
              #:with name-stx (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
-             #:when (in-scope? (symbol->string (syntax-e #'x)))
+
+             #:fail-unless (in-scope? (symbol->string (syntax-e #'x))) "identifier is not in scope."
              #:with size-int (get-binding-size (symbol->string (syntax-e #'x)))
              #:with arities (get-binding-arities (symbol->string (syntax-e #'x)))
              #:with is-array?
@@ -237,7 +239,7 @@
     
   (define-syntax-class bound-usage
     #:description "identifier in scope with or without size, or array access"
-
+    #:commit
     (pattern s:scoped-binding
              #:with name #'s.name
              #:with size (datum->syntax this-syntax "")
@@ -468,12 +470,14 @@
     (pattern #:negedge))
 
   (define-syntax-class sensitivity
-    (pattern [edge:edge-type signal:bound-usage]
+    #:no-delimit-cut
+    (pattern [edge:edge-type ~! signal:bound-usage]
              #:with edge-type (datum->syntax this-syntax (keyword->string (syntax-e #'edge)))
              #:with compiled #'signal.compiled)
     (pattern [signal:bound-usage]             
              #:with edge-type (datum->syntax this-syntax "")
-             #:with compiled #'signal.compiled))
+             #:with compiled #'signal.compiled)
+    )
 
   (define-syntax-class direction-option
     (pattern #:input)
@@ -1068,7 +1072,7 @@
       ,(always-line expr) ...
       dec-tab
       ,(toggle-always-sens))]
-  [(_ (sens:sensitivity rest:sensitivity ...) expr ...)
+  [(_ (sens:sensitivity ~! rest:sensitivity ... ~!) expr ...)
    (toggle-always-sens)
    #'`(
        tab
@@ -1087,7 +1091,7 @@
        dec-tab
        ,(toggle-always-sens)
        )]
-    [(_ * expr ...)
+  [(_ * expr ...)
    (toggle-always-sens)
    #'`(
        tab
@@ -1104,7 +1108,8 @@
        inc-tab
        ,(always-line expr) ...
        dec-tab
-       )])
+       )]
+    )
 
 (define-syntax-parser ~module-line
   #:datum-literals (set vmod) 
