@@ -204,7 +204,6 @@
     (pattern x:id
              #:with name  (symbol->string (syntax-e #'x))
              #:with name-stx (datum->syntax this-syntax (symbol->string (syntax-e #'x)))
-
              #:fail-unless (in-scope? (symbol->string (syntax-e #'x))) "identifier is not in scope."
              #:with size-int (get-binding-size (symbol->string (syntax-e #'x)))
              #:with arities (get-binding-arities (symbol->string (syntax-e #'x)))
@@ -494,7 +493,7 @@
     (pattern #:time)
     (pattern #:real))
 
-    (define-syntax-class function-param
+  (define-syntax-class function-param
     #:description "a function parameter"
     (pattern [name-sym:id
               (~optional [x (~optional y)])]
@@ -875,7 +874,6 @@
 
 (define-syntax-parser enum
   [(_ name kvp:enum-kvp ...+)
-   
    #:fail-when (check-duplicate-identifier
                 (syntax->list #'(kvp.x ...)))
     "duplicate enum name"
@@ -1072,7 +1070,7 @@
       ,(always-line expr) ...
       dec-tab
       ,(toggle-always-sens))]
-  [(_ (sens:sensitivity ~! rest:sensitivity ... ~!) expr ...)
+  [(_ (sens:sensitivity rest:sensitivity ...) expr ...)
    (toggle-always-sens)
    #'`(
        tab
