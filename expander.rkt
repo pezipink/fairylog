@@ -544,7 +544,8 @@
                [else #'""])))
 
   (define-syntax-class local-param
-    #:datum-literals (array)   
+    #:datum-literals (array)
+
    (pattern [name-sym:id
               type-opt:type-option
               [x (~optional y)]
@@ -614,7 +615,7 @@
 (define-syntax-parser expression
   #:datum-literals
   (set ~delay if case else when concat
-   \|\| \| \~\| ! ~ + - * / % << >> == != >= <= < > && & ~&  ^ ~^ )
+   \|\| \| \~\| ! ~ + - * / % << >> >>> == != >= <= < > && & ~&  ^ ~^ )
   [(_ x:integer)
    #'x]
   [(_ x:number-literal )
@@ -683,7 +684,7 @@
    #'`(,op-str  ,(expression x))]
 
   ; binary  
-  [(_ ( (~and op (~or + - * / % << >> == != < > <= >= && & \|\| \| ^ ~^)) x y ))
+  [(_ ( (~and op (~or + - * / % << >> >>> == != < > <= >= && & \|\| \| ^ ~^)) x y ))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
    #'`(
        "("
@@ -693,7 +694,7 @@
        " "
        ,(expression y)
        ")")]
-  [(_ ( (~and op (~or + - * / % << >> == != <= >= && & \|\| \| ^ ~^)) x y z ... ))
+  [(_ ( (~and op (~or + - * / % << >> >>> == != <= >= && & \|\| \| ^ ~^)) x y z ... ))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
       #'`(
           "("
@@ -758,7 +759,7 @@
    
 (define-syntax-parser ~case
   #:datum-literals (else)
-  [(_ test:bound-usage [lhs:number-literal rhs] ...)
+  [(_ test:bound-usage [lhs:number-literal rhs (~optional comment:string #:defaults ([comment #'""]))] ...)
    #'`(
        tab
        "case ("
@@ -768,14 +769,16 @@
        (
         tab
         ,lhs.compiled
-        " : \n"
+        " : // "
+        comment
+        "\n"
         ,(~begin rhs)
         "\n"
         ) ...
        dec-tab
        tab
        "endcase\n")]
-  [(_ test:bound-usage [lhs:number-literal rhs] ...
+  [(_ test:bound-usage [lhs:number-literal rhs (~optional comment:string #:defaults ([comment #'""]))] ...
       [else else-expr:expr])
    #'`(
        tab
@@ -786,7 +789,9 @@
        (
         tab
         ,lhs.compiled
-        " : \n"
+        " : // "
+        comment
+        "\n"
         ,(~begin rhs)
         "\n"
         ) ...
@@ -941,9 +946,12 @@
          #f))
    "missing cases in the enum"
      
-   (with-syntax([(enum-vals ...) (map (λ (v) (get-enum-value (syntax-e #'enum-name) v))
-                                      (syntax->datum #'(key ...)))])
-     #'(~case test [enum-vals expr] ...))]
+   (with-syntax
+     ([(enum-vals ...) (map (λ (v) (get-enum-value (syntax-e #'enum-name) v))
+                            (syntax->datum #'(key ...)))]
+      [(key-str ...) (map (λ (v) (symbol->string v))
+                          (syntax->datum #'(key ...)))] )
+     #'(~case test [enum-vals expr key-str] ...))]
 )
 
 (define-syntax-parser ~case-set
