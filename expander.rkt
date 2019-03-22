@@ -26,10 +26,10 @@
 
   (define current-module "")
   (define (set-current-module name)
-    (printf "setting current module ~a\n" name)
+;    (printf "setting current module ~a\n" name)
     (set! current-module name))
   (define (enum-exists? enum-name)
-    (hash-has-key? declared-enums enum-name))
+     (hash-has-key? declared-enums enum-name))
   
   (define (enum-key-exists? enum-name key)
     (let ([enum-name
@@ -131,7 +131,11 @@
     #:description "a module initializer"
     (pattern [port-name:id port-value:bound-usage] 
              #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'port-name)))       
-             #:with value(datum->syntax this-syntax #'port-value.compiled)))
+             #:with value(datum->syntax this-syntax #'port-value.compiled))
+
+    (pattern [port-name:id port-value:expr] 
+             #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'port-name)))       
+             #:with value(datum->syntax this-syntax #'(expression port-value))))
   
   (define scoped-bindings-stack (box (list (make-hash))))
   (define (push-scoped-stack)
@@ -239,13 +243,6 @@
   (define-syntax-class bound-usage
     #:description "identifier in scope with or without size, or array access"
     #:commit
-    (pattern s:scoped-binding
-             #:with name #'s.name
-             #:with size (datum->syntax this-syntax "")
-             #:with size-int #'s.size-int
-             #:with oob #'#f
-             #:with compiled   (datum->syntax this-syntax (symbol->string (syntax-e (attribute s))))
-             #:with name-stx #'compiled) ;used in error reporting
 
     ;arrays:
     ;when accessing an array, verilog says you must use all the dimensions.
@@ -326,7 +323,16 @@
                    [(x:inner-usage)
                     #'1])
                    
-             ))
+                 ))
+
+        (pattern s:scoped-binding
+             #:with name #'s.name
+             #:with size (datum->syntax this-syntax "")
+             #:with size-int #'s.size-int
+             #:with oob #'#f
+             #:with compiled   (datum->syntax this-syntax (symbol->string (syntax-e (attribute s))))
+             #:with name-stx #'compiled) ;used in error reporting
+
     ))
 
 (define-syntax (push-binding stx)
@@ -682,7 +688,8 @@
    #'(void)]
 
   ; unary
-  [(_ ( (~and op (~or + - ! ~ & ~& ~ \| \~\| ^ ~^)) x))
+
+  [(_ ( (~and op (~or + - ! & ~& ~ \| \~\| ^ ~^)) x))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
    #'`(,op-str  ,(expression x))]
 
@@ -740,13 +747,13 @@
    #:with op (if is-always-sens #'" <= " #'" = ")
    #:with name (datum->syntax this-syntax (format "~a" #'y))
    #'`(
-       ,(when (and (number? (expression y))(>= (expression y) x.size-int))
-          (printf "\"warning: the expression '~a' does not fit into '~a' and will be truncated\"\n" name x.name-stx))       
+       ,(when (and (number? (expression y))(> (string-length (format "~b" (expression y))) x.size-int))
+          (printf "\"warning: the expression '~a' does not fit into '~a' and will be truncated\"\n" name  x.name-stx))       
        ,(expression x)
        op
        ,(expression y))]
     
-  [(_ (set ~! x y))
+  [(_ (set x y))
    #:with op (if is-always-sens #'" <= " #'" = ")
    #'`(
        ,(expression x)
@@ -754,7 +761,6 @@
        ,(expression y))]
 
   [(_ x:expr)
-;   (printf "ex ~a\n" #'x)
    #'x]
   
   )
@@ -805,7 +811,8 @@
        "\n"
        dec-tab
        tab
-       "endcase\n")])
+       "endcase\n")]
+)
 
 (define-syntax-parser ~cond
   #:datum-literals (else)
@@ -967,12 +974,12 @@
    #'`(tab
        ,(expression expr ...)
        ";\n")]  
-  [(_ (set [x y] ...))
+  [(_ (set [x:bound-usage y] ...))
    #'`(
        (tab
         ,(expression (set x y))
         ";\n")...)]
-  [(_ (set x y))
+  [(_ (set x:bound-usage y))
    #'`(
        (tab
         ,(expression (set x y))
@@ -992,7 +999,7 @@
    #:with name (datum->syntax this-syntax (symbol->string (syntax-e #'block-name)))
    #'`(
        tab
-       "beign "
+       "begin "
        ,name
        "\n"
        inc-tab
@@ -1111,11 +1118,11 @@
 
 (define-syntax-parser ~module-line
   #:datum-literals (set vmod) 
-  [(_ (set [x y] ...))
+  [(_ (set [x:bound-usage y] ...))
    #'`((tab
         ,(expression (set x y))
         "a;\n") ...)]
-  [(_ (set x y))
+  [(_ (set x:bound-usage y))
    #'`(tab
        ,(expression (set x y))
        "b;\n")]
