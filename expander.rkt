@@ -1,3 +1,4 @@
+
 ;Fairylog
 ;Copyright Ross McKinlay, 2019
 
@@ -10,10 +11,11 @@
                      racket/syntax
                      racket/string
                      syntax/srcloc
+                     syntax/location
                      racket/list))
 
 
-(require syntax/parse/define)
+(require syntax/parse/define syntax/location)
 
 (begin-for-syntax
   ; true when expanding inside an always block with a sensitivity list
@@ -28,10 +30,18 @@
   (define (set-current-module name)
 ;    (printf "setting current module ~a\n" name)
     (set! current-module name))
-  (define (enum-exists? enum-name)
-     (hash-has-key? declared-enums enum-name))
+
+  (define (enum-exists? ctx enum-name)
+    (printf "in enum exists ~a\n" enum-name)
+    (let ([gn (datum->syntax ctx (string->symbol (string-append "global-enum-" enum-name)))])
+      (if (syntax-local-value gn (λ () #f))
+          (begin (printf "found enum\n")
+                 #t)
+          (begin (printf "no found enum\n")
+                 (hash-has-key? declared-enums enum-name)))))
   
-  (define (enum-key-exists? enum-name key)
+  (define (enum-key-exists? ctx enum-name key)
+    (printf "enum key exists\n")
     (let ([enum-name
            (if (symbol? enum-name)
                (symbol->string enum-name)
@@ -40,23 +50,33 @@
            (if (symbol? key)
                (symbol->string key)
                key)])
-      (member key (map car (hash-ref declared-enums enum-name)))))
+      (let ([gn  (datum->syntax ctx (string->symbol (string-append "global-enum-" enum-name)))])
+        (if (syntax-local-value gn (λ () #f))
+            (member key (map car (syntax-local-value gn)))                    
+            (member key (map car (hash-ref declared-enums enum-name)))))
+))
 
-  (define (get-enum-keys enum-name)
+  (define (get-enum-keys ctx enum-name)
     (map car (hash-ref declared-enums (symbol->string enum-name))))
 
-  (define (get-enum-value enum-name key)    
+  (define (get-enum-value ctx enum-name key)    
     (let* ([enum-name
            (if (symbol? enum-name)
                (symbol->string enum-name)
                enum-name)]
-          [key
-           (if (symbol? key)
-               (symbol->string key)
-               key)]
-           [pairs (hash-ref declared-enums enum-name)]
-           [pair (memf (λ (p) (equal? (car p) key)) pairs)])
-      (cdr (car pair))))
+           [key
+            (if (symbol? key)
+                (symbol->string key)
+                key)]
+           [gn (datum->syntax ctx (string->symbol (string-append "global-enum-" enum-name)))])
+      (if (syntax-local-value gn (λ () #f))
+          (let
+              ([pair (memf (λ (p) (equal? (car p) key)) (syntax-local-value gn))])
+            (cdr (car pair)))
+          (let*
+           ([pairs (hash-ref declared-enums enum-name)]
+            [pair (memf (λ (p) (equal? (car p) key)) pairs)])
+           (cdr (car pair))))))
 
   (define (add-enum enum-name vals)
     (printf "enum ~a\n" (symbol->string enum-name) )
@@ -67,7 +87,7 @@
   (define-syntax-class enum
     #:description "a declared enum"
     #:opaque
-    (pattern x:id #:when (enum-exists? (symbol->string (syntax-e (attribute x))))))
+    (pattern x:id #:when (enum-exists? (attribute x) (symbol->string (syntax-e (attribute x))))))
 
   (define-syntax-class enum-kvp
     #:description "a name and numeric value pair"
@@ -87,21 +107,24 @@
                  (symbol->string (syntax-e (attribute x)))
                  "."))]
              #:when (eq? (length split) 2 )
-             #:fail-unless (enum-exists? (car split))
+             #:cut
+             #:fail-unless (enum-exists?  (attribute x) (car split))
              (format "the enum ~a does not exist" (car split))
-             #:fail-unless (enum-key-exists? (car split) (car (cdr split)))
+             #:fail-unless (enum-key-exists? (attribute x) (car split) (car (cdr split)))
              (format "the value ~a does not exist for enum ~a"
                      (car (cdr split))
                      (car split))
-             #:with value (datum->syntax this-syntax (get-enum-value (car split) (car (cdr split))))
+             #:with value (datum->syntax this-syntax (get-enum-value (attribute x) (car split) (car (cdr split))))
              #:with compiled
              (datum->syntax this-syntax
                             (format "~a (~a)" (symbol->string (syntax-e (attribute x)))
-                                    (get-enum-value (car split) (car (cdr split)))))
-             #:with bits (datum->syntax this-syntax (string-length (format "~b" (get-enum-value (car split) (car (cdr split))))))
+                                    (get-enum-value (attribute x) (car split) (car (cdr split)))))
+             #:with bits (datum->syntax this-syntax (string-length (format "~b" (get-enum-value (attribute x)(car split) (car (cdr split))))))
              ))
 
-
+  ;important note: these mutable structs do not work "globally", they are for
+  ;local expansion purposes only. the modules and ports are also exposed via
+  ;static bindings for other files to see. 
   (struct port-meta (name direction type) #:transparent)
   (struct func-meta (name size-int) #:transparent #:mutable)
   (struct module-meta (name ports functions) #:transparent #:mutable)
@@ -112,10 +135,13 @@
     (if (hash-has-key? module-metadata name)
         (error "module ~a already exists" name)
         (hash-set! module-metadata name (module-meta name ports '()))))
-  (define (module-exists? name)
-    (printf "exists ~a ?\n" name)
-    (hash-has-key? module-metadata name))
+  (define (module-exists? name-stx)
+    ;here we check for a static bidning to this works across files.
+    ;local metadata only exists for local function definitions
+    (syntax-local-value name-stx (λ () #f)))
+
   (define (module-has-port? module-name port-name)
+    ;todo: rewrite this to use static binding data.
     (memf (λ (port) (equal? (port-meta-name port) port-name))
           (module-meta-ports (hash-ref module-metadata module-name))))
   (define (module-has-function? module-name function-name)
@@ -879,6 +905,26 @@
    (add-enum (syntax-e #'name) (eval #'vals))
    #'(void)])
 
+;; (define-syntax (new-enum stx)
+;;   (printf "JKJK")
+;;   (if (syntax-property stx 'module)
+;;       (with-syntax ([n (symbol->string (syntax-e (syntax-property stx 'module)))])
+;;       #'(printf "true  ~a \n" n))
+;;       #'(print "false\n")))
+  
+
+(define-syntax-parser enum?
+  [(_ name)
+   (printf "enum testing ~a\n" #'name)
+   (printf "enum testing ~a\n" #'global-enum-test-enum)
+   (if (syntax-local-value (datum->syntax #'name 'global-enum-test-enum) (λ () #f))
+       (with-syntax ([vals (syntax-local-value #'global-enum-test-enum (λ () #f))])
+         (begin (printf "enum exists\n")
+                #'(void)))
+        (begin (printf "enum not exists\n")
+               #'(void)))])
+
+
 (define-syntax-parser enum
   [(_ name kvp:enum-kvp ...+)
    #:fail-when (check-duplicate-identifier
@@ -886,9 +932,23 @@
     "duplicate enum name"
    #:fail-when (check-duplicates
                 (syntax->datum #'(kvp.y-evaled ...)))
-   "duplicate enum value"   
-   (add-enum (syntax-e #'name) (syntax->datum #'(kvp.pair ...)))
-   #'(void)]
+   "duplicate enum value"
+
+   (if (syntax-property this-syntax 'module)
+       (begin
+         ;a local enum only need exist for this module during this expansion
+         (add-enum (syntax-e #'name) (syntax->datum #'(kvp.pair ...)))
+         #'(void))
+       ;otherwise we create a static binding for the enum data
+       ;prefixing the name with global-enum
+       (with-syntax ([g-name (datum->syntax this-syntax (string->symbol
+                                                         (string-append "global-enum-"
+                                                                      (symbol->string
+                                                                       (syntax-e #'name)))))])
+         (printf "ADDING ENUM ~a\n" #'g-name)
+         #'(define-syntax g-name             
+             '(kvp.pair ...)
+             )))]
   [(_ name keys:id ...+)
    #:fail-when (check-duplicate-identifier
                 (syntax->list #'(keys ...)))
@@ -899,8 +959,19 @@
            ([n (in-naturals)]
             [x (syntax->list #'(keys ...))])
          (cons (format "~a" (syntax-e x)) n))])
-   (add-enum (syntax-e #'name)(syntax->datum #'(kvps ...)))
-   #'(void))])
+   (if (syntax-property this-syntax 'module)
+       (begin
+         (add-enum (syntax-e #'name)(syntax->datum #'(kvps ...)))
+         #'(void))
+       (with-syntax ([g-name (datum->syntax this-syntax (string->symbol
+                                                         (string-append "global-enum-"
+                                                                        (symbol->string
+                                                                         (syntax-e #'name)))))])
+         #'(define-syntax g-name             
+             '(kvps ...)
+             ))
+       )
+       )])
 
 (define-syntax-parser ~match-set
   [(_ target:bound-usage test:expr enum-name:enum
@@ -909,7 +980,7 @@
     "duplicate enum value"
 
    #:fail-when
-   (let ([results (filter (λ (v) (not (enum-key-exists? (syntax-e #'enum-name) v)))
+   (let ([results (filter (λ (v) (not (enum-key-exists? #'enum-name (syntax-e #'enum-name) v)))
                           (syntax->datum #'(key ...)))])
      (if (not (eq? results '()))
          (with-syntax ([res results])  #'res)
@@ -920,13 +991,13 @@
    (let*
        ([keys (map (λ (v) (format "~a" v)) (syntax->datum #'(key ...)))]
         [results (filter (λ (v) (not (member v keys)))
-                         (get-enum-keys (syntax-e #'enum-name)))])
+                         (get-enum-keys #'enum-name (syntax-e #'enum-name)))])
      (if (not (eq? results '()))
          (with-syntax ([res results]) #'res)
          #f))
    "missing cases in the enum"
      
-   (with-syntax([(enum-vals ...) (map (λ (v) (get-enum-value (syntax-e #'enum-name) v))
+   (with-syntax([(enum-vals ...) (map (λ (v) (get-enum-value #'enum-name (syntax-e #'enum-name) v))
                                       (syntax->datum #'(key ...)))])
      #'(~case test [enum-vals (set target value)] ...))]
   )
@@ -938,7 +1009,7 @@
     "duplicate enum value"
 
    #:fail-when
-   (let ([results (filter (λ (v) (not (enum-key-exists? (syntax-e #'enum-name) v)))
+   (let ([results (filter (λ (v) (not (enum-key-exists? #'enum-name (syntax-e #'enum-name) v)))
                           (syntax->datum #'(key ...)))])
      (if (not (eq? results '()))
          (with-syntax ([res results])  #'res)
@@ -949,14 +1020,14 @@
    (let*
        ([keys (map (λ (v) (format "~a" v)) (syntax->datum #'(key ...)))]
         [results (filter (λ (v) (not (member v keys)))
-                         (get-enum-keys (syntax-e #'enum-name)))])
+                         (get-enum-keys #'enum-name (syntax-e #'enum-name)))])
      (if (not (eq? results '()))
          (with-syntax ([res results]) #'res)
          #f))
    "missing cases in the enum"
      
    (with-syntax
-     ([(enum-vals ...) (map (λ (v) (get-enum-value (syntax-e #'enum-name) v))
+     ([(enum-vals ...) (map (λ (v) (get-enum-value #'enum-name (syntax-e #'enum-name) v))
                             (syntax->datum #'(key ...)))]
       [(key-str ...) (map (λ (v) (symbol->string v))
                           (syntax->datum #'(key ...)))] )
@@ -1118,17 +1189,25 @@
 
 (define-syntax-parser ~module-line
   #:datum-literals (set vmod) 
-  [(_ (set [x:bound-usage y] ...))
-   #'`((tab
-        ,(expression (set x y))
-        "a;\n") ...)]
-  [(_ (set x:bound-usage y))
-   #'`(tab
-       ,(expression (set x y))
-       "b;\n")]
-  [(_ (vmod m:id  ~! p:module-param ... l:module-param ~!))
+  ;; [(_ mod-id (set [x:bound-usage y] ...))
+  ;;  (syntax-property
+  ;;  #'`((tab
+  ;;       ,(expression (set x y))
+  ;;       "a;\n") ...)
+  ;;  'module
+  ;;  #'mod-id)
+  ;;  ]
+  ;; [(_ mod-id (set x:bound-usage y))
+  ;;  (syntax-property
+  ;;   #'`(tab
+  ;;       ,(expression (set x y))
+  ;;       "b;\n")
+  ;;   'module
+  ;;   #'mod-id)
+  ;;   ]
+  [(_ mod-id (vmod m:id  ~! p:module-param ... l:module-param ~!))
 
-   #:fail-unless (module-exists? (symbol->string (syntax-e #'m)))
+   #:fail-unless (module-exists? #'m)
    (format "the module '~a' doesn't exist"(symbol->string (syntax-e #'m)))
 
 ;   #:fail-unless
@@ -1141,7 +1220,8 @@
          (printf "in mod init\n")
    (with-syntax([m-name (symbol->string (syntax-e #'m))]
                 [i-name (symbol->string (syntax-e #'x))])
-   #'`(
+     (syntax-property
+     #'`(
        ,m-name
        " (\n"
        inc-tab
@@ -1153,9 +1233,12 @@
        dec-tab
        ");\n"
 
-       ))]
-  [( _ x)
-   #'x])
+       )
+     'module
+     #'mod-id))
+     ]
+  [(_ mod-id x)
+   (syntax-property #'x 'module #'mod-id)])
 
 (define-syntax-parser function
   [(_ (~optional [x (~optional y)])
@@ -1181,7 +1264,8 @@
    (push-scoped-stack)
    (add-module-function current-module (symbol->string (syntax-e #'name-sym))
                         (syntax-e #'size-int))
-   #'`("function " ,size " " ,name ";\n"
+   #'`(
+       "function " ,size " " ,name ";\n"
        inc-tab
        tab
        ;push the name and size of the function as it is used
@@ -1201,6 +1285,34 @@
        ,(pop-scoped-stack)
        "endfunction\n")])
 
+(define-syntax-parser testaa
+  [(_ name-sym:id)
+   (if (syntax-local-value #'name-sym (λ () #f))
+       (with-syntax ([x (syntax-local-value #'name-sym)])
+         #''x)
+       #'(error "fail"))])
+
+
+(define out-port #f)
+(define (ensure-port-open filename)
+  (when (or (not (port? out-port))(port-closed? out-port))
+    (printf "opening file ~a for write ...\n" filename)
+    (set! out-port (open-output-file #:mode 'binary #:exists 'replace filename))))
+(define (ensure-port-closed)
+  (when (and (port? out-port) (not (port-closed? out-port)))
+    (close-output-port out-port)))
+
+
+(define-syntax-parser #%module-begin
+  [(_ exprs ...)
+   #'(#%plain-module-begin
+      (printf "MOD BEGIN\n")
+
+      exprs ...
+      (ensure-port-closed))])
+     
+
+
 (define-syntax-parser vmod
   [(_ name-sym:id
       (p:param ... last:param) ;inputs
@@ -1209,7 +1321,29 @@
    (push-scoped-stack)
    (set-current-module (symbol->string (syntax-e #'name-sym)))
    (add-module (syntax-e #'name)
-               (map (λ (lst)
+               '()
+               ;; (map (λ (lst)
+               ;;        (port-meta
+               ;;         (list-ref lst 0)
+               ;;         (list-ref lst 1)
+               ;;         (list-ref lst 2)                 
+               ;;         ))
+               ;;      (syntax->datum #'(p ... last)))
+               )
+   (let*
+       ([fn (string-replace (path->string (syntax-source-file-name this-syntax)) ".rkt" ".v")])
+        
+     (with-syntax
+       ([nf (datum->syntax this-syntax (build-path (syntax-source-directory this-syntax) fn))]
+      
+
+         )
+       (syntax-property       
+       #'(begin
+              (ensure-port-open nf)
+       (define-syntax name-sym
+         (list
+         (map (λ (lst)
                       (port-meta
                        (list-ref lst 0)
                        (list-ref lst 1)
@@ -1217,44 +1351,54 @@
                        ))
 
 
-                      (syntax->datum #'(p ... last))))
-  #'`(
-      ,(format "module ~a (\n" name)      
-      inc-tab
-      ;port declarations
-      (tab
-       ,p.direction
-       " "
-       ,p.type
-       " "
-       ,p.size
-       " "
-       ,p.name
-       " "
-       ,p.default
-       ",\n") ...
+              (syntax->datum #'(p ... last)))))
+     (provide name-sym)
+     (code-gen-2
+        `(
+         ,(format "module ~a (\n" name)      
+          inc-tab
+          ;port declarations
+          (tab
+           ,p.direction
+           " "
+           ,p.type
+           " "
+           ,p.size
+           " "
+           ,p.name
+           " "
+           ,p.default
+           ",\n") ...
 
-      tab
-      ,last.direction
-      " "
-      ,last.type
-      " "
-      ,last.size
-      " "
-      ,last.name
-      " "
-      ,last.default
-      ");"
-      ,(push-binding p.name p.size-int) ...
-      ,(push-binding last.name last.size-int)
-      
-      "\n"
-      dec-tab
-      ,(~module-line expression) ...
+          tab
+          ,last.direction
+          " "
+          ,last.type
+          " "
+          ,last.size
+          " "
+          ,last.name
+          " "
+          ,last.default
+          ");"
+          ,(push-binding p.name p.size-int) ...
+          ,(push-binding last.name last.size-int)
+          
+          "\n"
+         dec-tab
 
-      "endmodule\n"
-      ,(pop-scoped-stack)
-      )])
+         ,(~module-line name-sym expression) ...
+         
+          "endmodule\n"
+          ,(pop-scoped-stack)
+         )))
+       'module
+       #'name-sym
+       )
+
+       ))])
+
+  
 
 (define-syntax-parser always-pos
   [(_ clock exprs ...)
@@ -1273,11 +1417,34 @@
       (list exprs ...)
       filename)])
 
+(define (code-gen-2 input )
+;  (printf "codegen2 with ~a \n" input)
+  (define tab 0)
+  (define (aux in)
+    (for ([sym in])
+;      (printf "~a\n" sym)
+      (cond
+        [(or (string? sym) (integer? sym))
+         (begin
+           (display sym out-port))]
+        [(eq? 'inc-tab sym) (set! tab (+ 1 tab))]
+        [(eq? 'tab sym)     (display (make-string (* 2 tab) #\ ) out-port)]
+        [(eq? 'dec-tab sym) (set! tab (- tab 1))]
+        [(eq? '() sym) '()]
+        [(list? sym) (aux sym)]
+        [(void? sym) '()]
+        [else (printf "unknown ~a\n" sym)
+              ])))
+  (printf "writing to port ~a ... \n" out-port)
+  (aux input)
+  (printf "finished.\n"))
+
 (define (code-gen input filename)
   (define tab 0)
   (define out (open-output-file #:mode 'binary #:exists 'replace filename))
   (define (aux in)
     (for ([sym in])
+;      (printf "~a\n" sym)
       (cond
         [(or (string? sym) (integer? sym))
          (begin
@@ -1303,3 +1470,4 @@
              define-syntax-parser)
  (rename-out
   [define-syntax-parser macro]))
+
