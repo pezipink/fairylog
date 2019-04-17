@@ -1,4 +1,3 @@
-
 ;Fairylog
 ;Copyright Ross McKinlay, 2019
 
@@ -32,16 +31,13 @@
     (set! current-module name))
 
   (define (enum-exists? ctx enum-name)
-    (printf "in enum exists ~a\n" enum-name)
     (let ([gn (datum->syntax ctx (string->symbol (string-append "global-enum-" enum-name)))])
       (if (syntax-local-value gn (λ () #f))
-          (begin (printf "found enum\n")
-                 #t)
-          (begin (printf "no found enum\n")
-                 (hash-has-key? declared-enums enum-name)))))
+          #t
+          (hash-has-key? declared-enums enum-name))))
   
   (define (enum-key-exists? ctx enum-name key)
-    (printf "enum key exists\n")
+;    (printf "enum key exists\n")
     (let ([enum-name
            (if (symbol? enum-name)
                (symbol->string enum-name)
@@ -136,15 +132,19 @@
         (error "module ~a already exists" name)
         (hash-set! module-metadata name (module-meta name ports '()))))
   (define (module-exists? name-stx)
-    ;here we check for a static bidning to this works across files.
-    ;local metadata only exists for local function definitions
-    (syntax-local-value name-stx (λ () #f)))
-
-  (define (module-has-port? module-name port-name)
-    ;todo: rewrite this to use static binding data.
-    (memf (λ (port) (equal? (port-meta-name port) port-name))
-          (module-meta-ports (hash-ref module-metadata module-name))))
+    ;here we check for a static binding to this works across files.
+    (if (syntax-local-value name-stx (λ () #f))
+        #t
+        (hash-ref module-metadata (symbol->string (syntax-e name-stx)))))
+  (define (module-has-port? name-stx port-name)
+    ;uses static binding data
+    (if (syntax-local-value name-stx (λ () #f))
+        (memf (λ (port) (equal? (symbol->string (port-meta-name port)) port-name))
+              (module-meta-ports (syntax-local-value name-stx)))
+        (memf (λ (port) (equal? (symbol->string (port-meta-name port)) port-name))
+              (module-meta-ports (hash-ref module-metadata (symbol->string (syntax-e name-stx)))))))
   (define (module-has-function? module-name function-name)
+    ;uses local data
     (memf (λ (func) (equal? (func-meta-name func) function-name))
           (module-meta-functions (hash-ref module-metadata module-name))))
   (define (add-module-function module-name function-name size)
@@ -902,28 +902,9 @@
 
 (define-syntax-parser list->enum
   [(_ name vals)
+   ;todo: add global support here
    (add-enum (syntax-e #'name) (eval #'vals))
    #'(void)])
-
-;; (define-syntax (new-enum stx)
-;;   (printf "JKJK")
-;;   (if (syntax-property stx 'module)
-;;       (with-syntax ([n (symbol->string (syntax-e (syntax-property stx 'module)))])
-;;       #'(printf "true  ~a \n" n))
-;;       #'(print "false\n")))
-  
-
-(define-syntax-parser enum?
-  [(_ name)
-   (printf "enum testing ~a\n" #'name)
-   (printf "enum testing ~a\n" #'global-enum-test-enum)
-   (if (syntax-local-value (datum->syntax #'name 'global-enum-test-enum) (λ () #f))
-       (with-syntax ([vals (syntax-local-value #'global-enum-test-enum (λ () #f))])
-         (begin (printf "enum exists\n")
-                #'(void)))
-        (begin (printf "enum not exists\n")
-               #'(void)))])
-
 
 (define-syntax-parser enum
   [(_ name kvp:enum-kvp ...+)
@@ -1208,14 +1189,14 @@
   [(_ mod-id (vmod m:id  ~! p:module-param ... l:module-param ~!))
 
    #:fail-unless (module-exists? #'m)
-   (format "the module '~a' doesn't exist"(symbol->string (syntax-e #'m)))
+   (format "the module '~a' doesn't exist" #'m (symbol->string (syntax-e #'m)))
 
-;   #:fail-unless
-   ;; (andmap (λ (lst) (module-has-port?  (symbol->string (syntax-e #'m)) lst))
-   ;;         (syntax->datum #'(p.name ... l.name)))
+  #:fail-unless
+   (andmap (λ (name) (module-has-port? #'m name))
+           (syntax->datum #'(p.name ... l.name)))
 
    ;; ;; ;todo: show which fields are missing
-   ;;  "module instantation does not contain all module fields"
+    "module instantation does not contain all module fields"
 
          (printf "in mod init\n")
    (with-syntax([m-name (symbol->string (syntax-e #'m))]
@@ -1285,14 +1266,6 @@
        ,(pop-scoped-stack)
        "endfunction\n")])
 
-(define-syntax-parser testaa
-  [(_ name-sym:id)
-   (if (syntax-local-value #'name-sym (λ () #f))
-       (with-syntax ([x (syntax-local-value #'name-sym)])
-         #''x)
-       #'(error "fail"))])
-
-
 (define out-port #f)
 (define (ensure-port-open filename)
   (when (or (not (port? out-port))(port-closed? out-port))
@@ -1302,16 +1275,16 @@
   (when (and (port? out-port) (not (port-closed? out-port)))
     (close-output-port out-port)))
 
-
 (define-syntax-parser #%module-begin
   [(_ exprs ...)
    #'(#%plain-module-begin
-      (printf "MOD BEGIN\n")
-
       exprs ...
       (ensure-port-closed))])
-     
 
+(define-syntax-parser test?
+  [(_ name)
+   (syntax-local-value #'name)
+   #'(void)])
 
 (define-syntax-parser vmod
   [(_ name-sym:id
@@ -1321,84 +1294,77 @@
    (push-scoped-stack)
    (set-current-module (symbol->string (syntax-e #'name-sym)))
    (add-module (syntax-e #'name)
-               '()
-               ;; (map (λ (lst)
-               ;;        (port-meta
-               ;;         (list-ref lst 0)
-               ;;         (list-ref lst 1)
-               ;;         (list-ref lst 2)                 
-               ;;         ))
-               ;;      (syntax->datum #'(p ... last)))
-               )
-   (let*
-       ([fn (string-replace (path->string (syntax-source-file-name this-syntax)) ".rkt" ".v")])
-        
-     (with-syntax
-       ([nf (datum->syntax this-syntax (build-path (syntax-source-directory this-syntax) fn))]
-      
-
-         )
-       (syntax-property       
-       #'(begin
-              (ensure-port-open nf)
-       (define-syntax name-sym
-         (list
-         (map (λ (lst)
+               (map (λ (lst) ;todo: we don't need this anymore, really
                       (port-meta
                        (list-ref lst 0)
                        (list-ref lst 1)
                        (list-ref lst 2)                 
                        ))
+                    (syntax->datum #'(p ... last))))
+   (let*
+       ([fn (string-replace
+             (path->string (syntax-source-file-name this-syntax)) ".rkt" ".v")])     
+     (with-syntax
+       ([nf (datum->syntax this-syntax
+                           (build-path (syntax-source-directory this-syntax) fn))])
+       (printf "adding stx in ~a \n" this-syntax)
+       (syntax-property       
+        #'(begin
+            (ensure-port-open nf)
 
+            (define-syntax name-sym
+              (module-meta name
+                (map (λ (lst)
+                       (port-meta
+                        (list-ref lst 0)
+                        (list-ref lst 1)
+                        (list-ref lst 2)))
+                     (syntax->datum #'(p ... last)))  '()))
 
-              (syntax->datum #'(p ... last)))))
-     (provide name-sym)
-     (code-gen-2
-        `(
-         ,(format "module ~a (\n" name)      
-          inc-tab
-          ;port declarations
-          (tab
-           ,p.direction
-           " "
-           ,p.type
-           " "
-           ,p.size
-           " "
-           ,p.name
-           " "
-           ,p.default
-           ",\n") ...
+            (provide name-sym)
 
-          tab
-          ,last.direction
-          " "
-          ,last.type
-          " "
-          ,last.size
-          " "
-          ,last.name
-          " "
-          ,last.default
-          ");"
-          ,(push-binding p.name p.size-int) ...
-          ,(push-binding last.name last.size-int)
-          
-          "\n"
-         dec-tab
+            (code-gen
+             `(
+               ,(format "module ~a (\n" name)      
+               inc-tab
+               ;port declarations
+               (tab
+                ,p.direction
+                " "
+                ,p.type
+                " "
+                ,p.size
+                " "
+                ,p.name
+                " "
+                ,p.default
+                ",\n") ...
 
-         ,(~module-line name-sym expression) ...
-         
-          "endmodule\n"
-          ,(pop-scoped-stack)
-         )))
-       'module
-       #'name-sym
-       )
+               tab
+               ,last.direction
+               " "
+               ,last.type
+               " "
+               ,last.size
+               " "
+               ,last.name
+               " "
+               ,last.default
+               ");"
+               ,(push-binding p.name p.size-int) ...
+               ,(push-binding last.name last.size-int)
+               
+               "\n"
+               dec-tab
 
-       ))])
-
-  
+               ,(~module-line name-sym expression) ...
+               
+               "endmodule\n"
+               ,(pop-scoped-stack)
+               )))
+        'module
+        #'name-sym
+        )))])
 
 (define-syntax-parser always-pos
   [(_ clock exprs ...)
@@ -1411,18 +1377,10 @@
 (define-syntax-parser initial-begin
   [(_ exprs ...) #'`("initial " ,(~begin exprs ...))])
 
-(define-syntax-parser vfile
-  [(_ filename exprs ...)
-   #'(code-gen
-      (list exprs ...)
-      filename)])
-
-(define (code-gen-2 input )
-;  (printf "codegen2 with ~a \n" input)
+(define (code-gen input )
   (define tab 0)
   (define (aux in)
     (for ([sym in])
-;      (printf "~a\n" sym)
       (cond
         [(or (string? sym) (integer? sym))
          (begin
@@ -1439,28 +1397,6 @@
   (aux input)
   (printf "finished.\n"))
 
-(define (code-gen input filename)
-  (define tab 0)
-  (define out (open-output-file #:mode 'binary #:exists 'replace filename))
-  (define (aux in)
-    (for ([sym in])
-;      (printf "~a\n" sym)
-      (cond
-        [(or (string? sym) (integer? sym))
-         (begin
-           (display sym out))]
-        [(eq? 'inc-tab sym) (set! tab (+ 1 tab))]
-        [(eq? 'tab sym)     (display (make-string (* 2 tab) #\ ) out)]
-        [(eq? 'dec-tab sym) (set! tab (- tab 1))]
-        [(eq? '() sym) '()]
-        [(list? sym) (aux sym)]
-        [(void? sym) '()]
-        [else (printf "unknown ~a\n" sym)
-              ])))
-  (printf "generating file ~a ... \n" filename)
-  (aux input)
-  (close-output-port out)
-    (printf "finished.\n"))
 
 (provide
 
