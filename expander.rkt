@@ -126,8 +126,6 @@
   (struct module-meta (name ports functions) #:transparent #:mutable)
   (define module-metadata (make-hash))
   (define (add-module name ports)
-    (printf "adding module ~a\n" name)
-    (printf "~a\n" (hash-keys module-metadata))
     (if (hash-has-key? module-metadata name)
         (error "module ~a already exists" name)
         (hash-set! module-metadata name (module-meta name ports '()))))
@@ -142,7 +140,8 @@
         (memf (λ (port) (equal? (symbol->string (port-meta-name port)) port-name))
               (module-meta-ports (syntax-local-value name-stx)))
         (memf (λ (port) (equal? (symbol->string (port-meta-name port)) port-name))
-              (module-meta-ports (hash-ref module-metadata (symbol->string (syntax-e name-stx)))))))
+              (module-meta-ports (hash-ref module-metadata
+                                           (symbol->string (syntax-e name-stx)))))))
   (define (module-has-function? module-name function-name)
     ;uses local data
     (memf (λ (func) (equal? (func-meta-name func) function-name))
@@ -717,7 +716,7 @@
 
   [(_ ( (~and op (~or + - ! & ~& ~ \| \~\| ^ ~^)) x))
    #:with op-str (datum->syntax this-syntax (symbol->string (syntax-e #'op)))
-   #'`(,op-str  ,(expression x))]
+  #'`(,op-str  ,(expression x))]
 
   ; binary  
   [(_ ( (~and op (~or + - * / % << >> >>> == != < > <= >= && & \|\| \| ^ ~^)) x y ))
@@ -1039,7 +1038,7 @@
   [(_ x:expr)
    #'x]   )
 
-(define-syntax-parser ~inc
+(define-syntax-parser inc
   [( _ x:scoped-binding)
    #'`(tab
        ,(expression (set x (+ x 1)))
@@ -1307,7 +1306,6 @@
      (with-syntax
        ([nf (datum->syntax this-syntax
                            (build-path (syntax-source-directory this-syntax) fn))])
-       (printf "adding stx in ~a \n" this-syntax)
        (syntax-property       
         #'(begin
             (ensure-port-open nf)
