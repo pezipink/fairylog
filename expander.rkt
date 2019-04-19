@@ -1148,7 +1148,6 @@
        ,(toggle-always-sens)
        )]
   [(_ * expr ...)
-   (toggle-always-sens)
    #'`(
        tab
        "always @(*)\n"
