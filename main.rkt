@@ -9,7 +9,11 @@
                      [if r:if]
                      [case r:case]
                      [begin r:begin]
-                     [eq? r:eq?])
+                     [eq? r:eq?]
+                     [* r:*]
+                     [+ r:+]
+                     [- r:-]
+                     )
           #%module-begin
           ))
 (require (for-syntax racket 

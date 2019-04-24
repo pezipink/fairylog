@@ -1301,7 +1301,7 @@
                     (syntax->datum #'(p ... last))))
    (let*
        ([fn (string-replace
-             (path->string (syntax-source-file-name this-syntax)) ".rkt" ".v")])     
+             (path->string (syntax-source-file-name #'name-sym)) ".rkt" ".v")])     
      (with-syntax
        ([nf (datum->syntax this-syntax
                            (build-path (syntax-source-directory this-syntax) fn))])
@@ -1390,9 +1390,10 @@
         [(void? sym) '()]
         [else (printf "unknown ~a\n" sym)
               ])))
-  (printf "writing to port ~a ... \n" out-port)
+;  (printf "writing to port ~a ... \n" out-port)
   (aux input)
-  (printf "finished.\n"))
+ ; (printf "finished.\n")
+  )
 
 
 (provide
