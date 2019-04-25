@@ -1,14 +1,17 @@
 ;Fairylog
 ;Copyright Ross McKinlay, 2010
 #lang racket/base
-(require (rename-in racket                   
-                    [cond r:cond]
-                    [match r:match]
-                    [when r:when]
-                    [if r:if]
-                    [case r:case]
-                    [begin r:begin]
-                    [eq? r:eq?]))
+(require (except-in
+          (rename-in racket                   
+                     [cond r:cond]
+                     [match r:match]
+                     [when r:when]
+                     [if r:if]
+                     [case r:case]
+                     [begin r:begin]
+                     [eq? r:eq?])
+          #%module-begin
+          ))
 (require (for-syntax racket 
 ;"expander.rkt"
 ))

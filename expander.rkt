@@ -9,6 +9,7 @@
                      racket/list
                      racket/syntax
                      racket/string
+                     racket/function
                      syntax/srcloc
                      syntax/location
                      racket/list))
@@ -134,6 +135,14 @@
     (if (syntax-local-value name-stx (λ () #f))
         #t
         (hash-ref module-metadata (symbol->string (syntax-e name-stx)))))
+  (define (module-port-names name-stx)
+    (if (syntax-local-value name-stx (λ () #f))
+        (map (compose symbol->string port-meta-name)
+             (module-meta-ports (syntax-local-value name-stx)))
+        (map (compose symbol->string port-meta-name)
+             (module-meta-ports
+              (hash-ref module-metadata
+                        (symbol->string (syntax-e name-stx)))))))   
   (define (module-has-port? name-stx port-name)
     ;uses static binding data
     (if (syntax-local-value name-stx (λ () #f))
@@ -1189,14 +1198,25 @@
    #:fail-unless (module-exists? #'m)
    (format "the module '~a' doesn't exist" #'m (symbol->string (syntax-e #'m)))
 
-  #:fail-unless
+   #:fail-unless
    (andmap (λ (name) (module-has-port? #'m name))
            (syntax->datum #'(p.name ... l.name)))
+   (format "instantiation of module ~a contains invalid port names: ~a"
+           #'m
+           (filter (λ (name) (not (module-has-port? #'m name)))
+                   (syntax->datum #'(p.name ... l.name))))
 
-   ;; ;; ;todo: show which fields are missing
-    "module instantation does not contain all module fields"
+   #:fail-unless
+   (andmap (λ (name) (member name (syntax->datum #'(p.name ... l.name))))
+           (module-port-names #'m))
+   (format "instantiation of module ~a is missing the following ports: ~a"
+           #'m
+           (filter
+            (λ (name)
+              (not (member name (syntax->datum #'(p.name ... l.name)))))
+            (module-port-names #'m)))
+   
 
-         (printf "in mod init\n")
    (with-syntax([m-name (symbol->string (syntax-e #'m))]
                 [i-name (symbol->string (syntax-e #'x))])
      (syntax-property
@@ -1264,20 +1284,32 @@
        ,(pop-scoped-stack)
        "endfunction\n")])
 
-(define out-port #f)
+(define out-ports (make-hash))
 (define (ensure-port-open filename)
-  (when (or (not (port? out-port))(port-closed? out-port))
-    (printf "opening file ~a for write ...\n" filename)
-    (set! out-port (open-output-file #:mode 'binary #:exists 'replace filename))))
-(define (ensure-port-closed)
-  (when (and (port? out-port) (not (port-closed? out-port)))
-    (close-output-port out-port)))
+  ;todo: if already in hash, open for append
+  (if (hash-has-key? out-ports filename)
+      (let ([p (hash-ref out-ports filename)])
+        (when (port-closed? p)
+          (hash-set! out-ports filename
+                     (open-output-file #:mode 'binary #:exists 'append filename))))      
+      (hash-set! out-ports filename
+                 (open-output-file #:mode 'binary #:exists 'replace filename))))
+
+(define (get-port filename)
+  (ensure-port-open filename)
+  (hash-ref out-ports filename))
+
+(define (ensure-ports-closed)
+  (for ([p (hash-values out-ports)])
+    (close-output-port p)))
 
 (define-syntax-parser #%module-begin
   [(_ exprs ...)
    #'(#%plain-module-begin
       exprs ...
-      (ensure-port-closed))])
+      ;todo: we need a nicer way of dealing with knowing when files are done with
+      (ensure-ports-closed)
+      )])
 
 (define-syntax-parser test?
   [(_ name)
@@ -1299,6 +1331,7 @@
                        (list-ref lst 2)                 
                        ))
                     (syntax->datum #'(p ... last))))
+   (printf "source location for ~a is ~a\n" #'name-sym (syntax-source-file-name #'name-sym))
    (let*
        ([fn (string-replace
              (path->string (syntax-source-file-name #'name-sym)) ".rkt" ".v")])     
@@ -1320,7 +1353,7 @@
 
             (provide name-sym)
 
-            (code-gen
+            (code-gen nf
              `(
                ,(format "module ~a (\n" name)      
                inc-tab
@@ -1374,25 +1407,22 @@
 (define-syntax-parser initial-begin
   [(_ exprs ...) #'`("initial " ,(~begin exprs ...))])
 
-(define (code-gen input )
+(define (code-gen fn input)
   (define tab 0)
   (define (aux in)
     (for ([sym in])
       (cond
         [(or (string? sym) (integer? sym))
          (begin
-           (display sym out-port))]
+           (display sym (get-port fn)))]
         [(eq? 'inc-tab sym) (set! tab (+ 1 tab))]
-        [(eq? 'tab sym)     (display (make-string (* 2 tab) #\ ) out-port)]
+        [(eq? 'tab sym)     (display (make-string (* 2 tab) #\ ) (get-port fn))]
         [(eq? 'dec-tab sym) (set! tab (- tab 1))]
         [(eq? '() sym) '()]
         [(list? sym) (aux sym)]
         [(void? sym) '()]
-        [else (printf "unknown ~a\n" sym)
-              ])))
-;  (printf "writing to port ~a ... \n" out-port)
+        [else (printf "unknown ~a\n" sym) ])))
   (aux input)
- ; (printf "finished.\n")
   )
 
 
