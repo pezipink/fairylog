@@ -1163,7 +1163,6 @@
        inc-tab
        ,(always-line expr) ...
        dec-tab
-       ,(toggle-always-sens)
        )]
     [(_ expr ...)
    #'`(
@@ -1331,7 +1330,6 @@
                        (list-ref lst 2)                 
                        ))
                     (syntax->datum #'(p ... last))))
-   (printf "source location for ~a is ~a\n" #'name-sym (syntax-source-file-name #'name-sym))
    (let*
        ([fn (string-replace
              (path->string (syntax-source-file-name #'name-sym)) ".rkt" ".v")])     
